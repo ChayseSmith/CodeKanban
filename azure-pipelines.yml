@@ -1,0 +1,19 @@
+trigger:
+- '*'
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- task: JavaToolInstaller@0
+  inputs:
+    versionSpec: '17'
+    jdkArchitectureOption: x64
+    jdkSourceOption: PreInstalled
+- script: chmod +x android/gradlew && cd android && ./gradlew --no-daemon :app:assembleDebug
+  displayName: Build Android APK
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: android/app/build/outputs/apk/debug/app-debug.apk
+    artifact: code-kanban-android-debug
+  displayName: Publish installable APK
