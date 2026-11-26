@@ -2,6 +2,7 @@ package com.battlemanson.codekanban;
 
 import android.app.*;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Bundle;
 import android.graphics.Color;
@@ -30,6 +31,8 @@ public class MainActivity extends Activity {
     private static final ExecutorService BACKUPS=Executors.newSingleThreadExecutor();
     private static final java.util.concurrent.atomic.AtomicLong BACKUP_SEQUENCE=new java.util.concurrent.atomic.AtomicLong();
     private final Map<View,JSONObject> dropColumns=new LinkedHashMap<>();
+    private final Map<String,View> cardViews=new HashMap<>();
+    private final Set<String> expandedChildren=new HashSet<>(), expandedTasks=new HashSet<>();
     private final Map<View,JSONObject> dropBoards=new LinkedHashMap<>(); private LinearLayout dragBoardTargets;
     private final String[] palette={"#6366f1","#0d9488","#f59e0b","#e11d48","#0284c7","#9333ea"};
     private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
@@ -119,7 +122,7 @@ public class MainActivity extends Activity {
         }catch(JSONException e){error("Invalid default template",e.getMessage());}}
     private void error(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK",null).show();}
     private JSONObject newColumn(String name,String color){return put(put(put(put(obj(),"id",id()),"name",name),"color",color),"cards",arr());}
-    private void boardView(){dropColumns.clear();dropBoards.clear();JSONObject b=board();if(b==null){current="";show();return;}String bid=current;
+    private void boardView(){dropColumns.clear();dropBoards.clear();cardViews.clear();JSONObject b=board();if(b==null){current="";show();return;}String bid=current;
         LinearLayout row=new LinearLayout(this);row.addView(action("‹ Back",()->{if(b.optString("parent").isEmpty()){current="";show();}else openBoard(b.optString("parent"));}));row.addView(action("+ Nested board",()->newBoard(bid)));row.addView(action("⋮",()->boardMenu(b)));content.addView(row);
         JSONArray boards=array(data,"boards");boolean children=false;for(int i=0;i<boards.length();i++){JSONObject child=at(boards,i);if(bid.equals(child.optString("parent"))){if(!children)section("Nested boards");children=true;boardTile(child);}}
         dragBoardTargets=vertical();dragBoardTargets.setVisibility(View.GONE);content.addView(dragBoardTargets);TextView hint=text("DROP ON A BOARD TO MOVE",13,MUTED,true);pad(hint,10);dragBoardTargets.addView(hint);for(int i=0;i<boards.length();i++){JSONObject target=at(boards,i);if(target==b)continue;TextView destination=text("▦  "+path(target),16,INK,true);pad(destination,14);destination.setBackground(shape(SURFACE,BORDER));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(8);dragBoardTargets.addView(destination,p);dropBoards.put(destination,target);}
@@ -135,7 +138,48 @@ public class MainActivity extends Activity {
         LinearLayout body=vertical();box.addView(body);body.setVisibility(c.optBoolean("collapsed")?View.GONE:View.VISIBLE);
         head.setContentDescription((c.optBoolean("collapsed")?"Expand ":"Collapse ")+c.optString("name"));
         head.setOnClickListener(v->{boolean was=c.optBoolean("collapsed"),next=!was;put(c,"collapsed",next);if(!save()){put(c,"collapsed",was);return;}body.setVisibility(next?View.GONE:View.VISIBLE);toggle.setText(next?"▸  ":"▾  ");head.setContentDescription((next?"Expand ":"Collapse ")+c.optString("name"));});
-        JSONArray cards=array(c,"cards");for(int i=0;i<cards.length();i++){JSONObject card=at(cards,i);TextView t=text(card.optString("title")+summary(card),16,INK,false);t.setPadding(dp(12),dp(14),dp(12),dp(14));t.setBackground(shape(BG,0));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(7);body.addView(t,p);t.setOnClickListener(v->editCard(b,c,card));t.setOnLongClickListener(v->{v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);cardMenu(b,c,card);return true;});t.setOnTouchListener(new CardTouch(b,c,card));}body.addView(action("+ Add work item",()->input("New work item","Title","",name->{JSONObject card=put(put(put(obj(),"id",id()),"title",name),"tasks",arr());put(card,"comments",arr());cards.put(card);save();show();})));
+        JSONArray cards=array(c,"cards");for(int i=0;i<cards.length();i++){JSONObject card=at(cards,i);LinearLayout cardView=boardCard(b,c,card);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(7);body.addView(cardView,p);cardViews.put(card.optString("id"),cardView);}body.addView(action("+ Add work item",()->input("New work item","Title","",name->{JSONObject card=put(put(put(obj(),"id",id()),"title",name),"tasks",arr());put(card,"comments",arr());cards.put(card);save();show();})));
+    }
+    private LinearLayout boardCard(JSONObject board,JSONObject column,JSONObject card){
+        LinearLayout view=vertical();view.setPadding(dp(12),dp(12),dp(12),dp(12));view.setBackground(shape(BG,0));
+        TextView title=text(card.optString("title"),16,INK,true);view.addView(title);
+        String description=card.optString("description","").split("\\n",-1)[0].trim();if(!description.isEmpty()){TextView snippet=text(description,14,MUTED,false);snippet.setMaxLines(2);snippet.setEllipsize(android.text.TextUtils.TruncateAt.END);snippet.setPadding(0,dp(5),0,0);view.addView(snippet);}
+        String labels=card.optString("labels","").trim();if(!labels.isEmpty()){TextView tags=text("Labels  "+labels,13,ACCENT,true);tags.setPadding(0,dp(7),0,0);view.addView(tags);}
+        StringBuilder detail=new StringBuilder();appendCardField(detail,"Due",card.optString("due"));appendCardField(detail,"Points",card.optString("points"));appendCardField(detail,"Priority",card.optString("priority"));appendCardField(detail,"Difficulty",card.optString("difficulty"));
+        JSONObject metadata=card.optJSONObject("templateData");appendCardField(detail,"Preference",card.optString("userPreference",metadata==null?"":metadata.optString("userPreference","")));appendCardField(detail,"ADO",card.optString("ado"));appendCardField(detail,"SM",card.optString("sm"));
+        if(detail.length()>0){TextView fields=text(detail.toString(),13,MUTED,false);fields.setPadding(0,dp(7),0,0);view.addView(fields);}
+        JSONArray tasks=array(card,"tasks");if(tasks.length()>0){
+            String key=board.optString("id")+"/"+card.optString("id");boolean open=expandedTasks.contains(key);
+            TextView heading=text("",14,ACCENT,true);heading.setPadding(0,dp(8),0,dp(6));view.addView(heading);
+            LinearLayout taskBody=vertical();taskBody.setVisibility(open?View.VISIBLE:View.GONE);view.addView(taskBody);
+            Runnable updateHeading=()->{int done=0;for(int i=0;i<tasks.length();i++)if(at(tasks,i).optBoolean("done"))done++;heading.setText((taskBody.getVisibility()==View.VISIBLE?"▾  ":"▸  ")+"Tasks ("+done+"/"+tasks.length()+")");heading.setContentDescription((taskBody.getVisibility()==View.VISIBLE?"Collapse":"Expand")+" tasks for "+card.optString("title"));};
+            updateHeading.run();heading.setOnClickListener(v->{boolean expand=taskBody.getVisibility()!=View.VISIBLE;taskBody.setVisibility(expand?View.VISIBLE:View.GONE);if(expand)expandedTasks.add(key);else expandedTasks.remove(key);updateHeading.run();});
+            for(int pass=0;pass<2;pass++)for(int i=0;i<tasks.length();i++){JSONObject task=at(tasks,i);boolean done=task.optBoolean("done");if(done!=(pass==1))continue;CheckBox check=new CheckBox(this);check.setText(task.optString("title"));check.setTextColor(done?MUTED:INK);check.setTextSize(14);check.setChecked(done);if(done)check.setPaintFlags(check.getPaintFlags()|android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);taskBody.addView(check);check.setOnCheckedChangeListener((button,checked)->{boolean before=task.optBoolean("done");put(task,"done",checked);if(!save()){put(task,"done",before);button.setOnCheckedChangeListener(null);button.setChecked(before);show();}else{button.setTextColor(checked?MUTED:INK);button.setPaintFlags(checked?button.getPaintFlags()|android.graphics.Paint.STRIKE_THRU_TEXT_FLAG:button.getPaintFlags()&~android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);updateHeading.run();}});}
+        }
+        try{
+            String parentId=card.optString("parentId","");if(!parentId.isEmpty()){WorkItemRelations.Entry parent=WorkItemRelations.find(board,parentId);if(parent!=null){TextView parentLink=text("↳ Parent: "+parent.card.optString("title"),14,ACCENT,true);parentLink.setPadding(0,dp(9),0,dp(4));parentLink.setOnClickListener(v->revealCard(board,parent.card.optString("id")));view.addView(parentLink);}else{TextView missing=text("Parent unavailable",13,MUTED,false);missing.setPadding(0,dp(8),0,0);view.addView(missing);}}
+            ArrayList<WorkItemRelations.Entry> children=new ArrayList<>();for(WorkItemRelations.Entry entry:WorkItemRelations.entries(board))if(!card.optString("id").equals(entry.card.optString("id"))&&card.optString("id").equals(entry.card.optString("parentId")))children.add(entry);
+            if(!children.isEmpty())addChildSection(view,board,card,children);
+        }catch(JSONException e){TextView warning=text("Relationships unavailable",13,MUTED,false);view.addView(warning);}
+        view.setOnClickListener(v->editCard(board,column,card));view.setOnLongClickListener(v->{v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);cardMenu(board,column,card);return true;});view.setOnTouchListener(new CardTouch(board,column,card));return view;
+    }
+    private void appendCardField(StringBuilder line,String label,String value){if(value==null||value.trim().isEmpty()||"null".equals(value))return;if(line.length()>0)line.append("  ·  ");line.append(label).append(": ").append(value.trim());}
+    private void addChildSection(LinearLayout cardView,JSONObject board,JSONObject card,ArrayList<WorkItemRelations.Entry> children){
+        String key=board.optString("id")+"/"+card.optString("id");boolean initiallyOpen=expandedChildren.contains(key);
+        TextView toggle=text((initiallyOpen?"▾  ":"▸  ")+"Children ("+children.size()+")",14,ACCENT,true);toggle.setPadding(0,dp(10),0,dp(6));cardView.addView(toggle);
+        LinearLayout content=vertical();content.setVisibility(initiallyOpen?View.VISIBLE:View.GONE);cardView.addView(content);
+        JSONArray columns=array(board,"columns");for(WorkItemRelations.Entry child:children){
+            TextView link=text(child.card.optString("title"),14,INK,true);link.setPadding(dp(4),dp(5),0,dp(3));link.setOnClickListener(v->revealCard(board,child.card.optString("id")));content.addView(link);
+            int index=0;for(int i=0;i<columns.length();i++)if(at(columns,i)==child.column){index=i;break;}int progress=WorkItemRelations.columnProgress(index,columns.length());
+            ProgressBar bar=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);bar.setMax(100);bar.setProgress(progress);bar.setProgressTintList(ColorStateList.valueOf(parseColor(child.column.optString("color"))));bar.setContentDescription("Column "+(index+1)+" of "+columns.length()+": "+child.column.optString("name"));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(6));p.bottomMargin=dp(8);content.addView(bar,p);
+        }
+        toggle.setContentDescription((initiallyOpen?"Collapse":"Expand")+" children of "+card.optString("title"));toggle.setOnClickListener(v->{boolean open=content.getVisibility()!=View.VISIBLE;content.setVisibility(open?View.VISIBLE:View.GONE);if(open)expandedChildren.add(key);else expandedChildren.remove(key);toggle.setText((open?"▾  ":"▸  ")+"Children ("+children.size()+")");toggle.setContentDescription((open?"Collapse":"Expand")+" children of "+card.optString("title"));});
+    }
+    private void revealCard(JSONObject board,String id){
+        try{WorkItemRelations.Entry entry=WorkItemRelations.find(board,id);if(entry==null){Toast.makeText(this,"Work item not found",Toast.LENGTH_SHORT).show();return;}if(entry.column.optBoolean("collapsed")){put(entry.column,"collapsed",false);if(!save()){put(entry.column,"collapsed",true);return;}}
+            current=board.optString("id");tab="boards";show();View target=cardViews.get(id);if(target==null)return;ScrollView scroll=boardScroll;
+            target.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener(){@Override public void onGlobalLayout(){target.getViewTreeObserver().removeOnGlobalLayoutListener(this);if(scroll!=boardScroll||!target.isAttachedToWindow())return;Rect bounds=new Rect();target.getDrawingRect(bounds);scroll.offsetDescendantRectToMyCoords(target,bounds);scroll.smoothScrollTo(0,Math.max(0,bounds.top-dp(12)));target.setBackground(shape(BG,ACCENT));target.announceForAccessibility("Work item "+entry.card.optString("title"));target.postDelayed(()->target.setBackground(shape(BG,0)),1200);}});target.requestLayout();
+        }catch(JSONException e){error("Could not find work item",e.getMessage());}
     }
     private int parseColor(String s){try{return Color.parseColor(s);}catch(Exception e){return ACCENT;}}
     private void cardMenu(JSONObject b,JSONObject c,JSONObject card){

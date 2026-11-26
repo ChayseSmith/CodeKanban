@@ -6,6 +6,7 @@ import java.util.*;
 /** Board-scoped parent links and atomic mutations on a caller-owned draft. */
 final class WorkItemRelations {
     private WorkItemRelations() {}
+    static int columnProgress(int index,int count){return count>1?Math.round(index*100f/(count-1)):0;}
     static final class Entry { final JSONObject column,card; Entry(JSONObject column,JSONObject card){this.column=column;this.card=card;} }
     static ArrayList<Entry> entries(JSONObject board) throws JSONException {
         ArrayList<Entry> result=new ArrayList<>();JSONArray cols=board.getJSONArray("columns");
