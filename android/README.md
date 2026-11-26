@@ -12,6 +12,8 @@ The Android app keeps its working data in private app storage. Boards can contai
 - Create, edit, delete and move work items between columns. Edit descriptions, labels, dates, planning fields, references, checklists and comments.
 - Tap a column header to collapse or expand it. Its state is saved per board, and a collapsed column remains a drag destination.
 - On a board, touch and hold a work item until the phone gives haptic feedback, then drag it to a highlighted column and release. Hold near the top or bottom edge to scroll. To open its action menu, release without dragging within half a second of the pickup feedback. A longer hold released in place cancels the pickup. A normal tap opens the editor.
+- Use a work item's action menu to choose or clear its parent, convert a checklist task into a child work item, or convert a child without tasks or children back into a parent checklist task. The editor shows parent and child relationships. Converting a work item to a task retains only its title and completion state and asks for confirmation.
+- Move a work item to another board from its action menu, or drag it to a board target that appears above the columns while dragging. Descendants move with it, into matching column names or the first column when no name matches. For a child, choose whether to move its root family or detach and move just its subtree. Families containing archived children cannot yet be moved.
 - Search work items across all boards and open their editors from the results.
 
 The editor saves when **Save** is tapped. The **More** actions leave the editor and discard unsaved edits. Deleting a board also deletes its descendants; deleting a column deletes its work items. Both require confirmation.
@@ -35,12 +37,12 @@ The root Azure DevOps pipeline builds the debug APK and publishes `code-kanban-a
 These extension capabilities are not yet implemented in the Android app:
 
 - Import/export of `.kanban` files, sync with a computer, and conflict handling.
-- Reordering cards or columns, moving items across boards, archive/restore, copying items, bulk actions, and custom colors beyond the presets.
+- Reordering cards or columns, archive/restore, copying items, bulk actions, and custom colors beyond the presets.
 - Grouped cross-board columns, field filters, sorting, saved search, a combined task view, and taskless-item view.
 - Full behavior for all template fields: template archive, board label settings and unsupported work-item properties are retained but are not yet available as working app features; board-level label management and color-coded labels.
 - Date/time picker and due-date validation, formatted Markdown, independently editable comments, task editing and reordering, numeric field validation, ADO links and SM copy actions.
 - Reminders, alarms, snooze, notification permissions, scheduling across device restarts, and reminder sounds.
-- Recurring work items, parent/child relationships, file bookmarks, column history, audit history/export and preference ranking.
+- Recurring work items, moving archived descendants, file bookmarks, column history, audit history/export and preference ranking.
 - Display-density options, accessibility and large-screen polish, automated UI tests, stable release signing, and Play Store distribution.
 - VS Code-specific integration such as editor selections, workspace discovery, sidebar views and window-title changes.
 

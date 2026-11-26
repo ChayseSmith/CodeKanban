@@ -6,6 +6,11 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.graphics.Color;
 import android.graphics.Rect;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
+import android.graphics.ColorFilter;
+import android.graphics.drawable.Drawable;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
@@ -25,6 +30,7 @@ public class MainActivity extends Activity {
     private static final ExecutorService BACKUPS=Executors.newSingleThreadExecutor();
     private static final java.util.concurrent.atomic.AtomicLong BACKUP_SEQUENCE=new java.util.concurrent.atomic.AtomicLong();
     private final Map<View,JSONObject> dropColumns=new LinkedHashMap<>();
+    private final Map<View,JSONObject> dropBoards=new LinkedHashMap<>(); private LinearLayout dragBoardTargets;
     private final String[] palette={"#6366f1","#0d9488","#f59e0b","#e11d48","#0284c7","#9333ea"};
     private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     private JSONObject obj(){return new JSONObject();} private JSONArray arr(){return new JSONArray();}
@@ -48,7 +54,9 @@ public class MainActivity extends Activity {
         BORDER=Color.parseColor(dark?"#354154":"#E1E6F0");
         getWindow().setStatusBarColor(dark?BG:Color.rgb(38,32,102));
         getWindow().setNavigationBarColor(dark?BG:Color.WHITE);
-        getWindow().getDecorView().setSystemUiVisibility(dark?0:View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        int systemUi=dark?0:View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        if(!dark&&android.os.Build.VERSION.SDK_INT>=35)systemUi|=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        getWindow().getDecorView().setSystemUiVisibility(systemUi);
         load();show();
     }
     private void load(){
@@ -59,11 +67,28 @@ public class MainActivity extends Activity {
     }
     private boolean save(){android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;try{out=file.startWrite();out.write(data.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);queueBackup();return true;}catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}}
     private GradientDrawable shape(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(16));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
+    private Drawable columnBackground(JSONObject column,boolean highlighted){
+        final int color=parseColor(column.optString("color"));
+        return new Drawable(){final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+            @Override public void draw(Canvas canvas){android.graphics.Rect b=getBounds();float radius=dp(16);paint.setColor(SURFACE);paint.setStyle(Paint.Style.FILL);canvas.drawRoundRect(b.left,b.top,b.right,b.bottom,radius,radius,paint);canvas.save();android.graphics.Path clip=new android.graphics.Path();clip.addRoundRect(b.left,b.top,b.right,b.bottom,radius,radius,android.graphics.Path.Direction.CW);canvas.clipPath(clip);paint.setColor(color);canvas.drawRect(b.left,b.top,b.left+dp(4),b.bottom,paint);canvas.restore();paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(highlighted?2:1));paint.setColor(highlighted?color:BORDER);float inset=paint.getStrokeWidth()/2;canvas.drawRoundRect(b.left+inset,b.top+inset,b.right-inset,b.bottom-inset,radius,radius,paint);paint.setStyle(Paint.Style.FILL);}
+            @Override public void setAlpha(int alpha){} @Override public void setColorFilter(ColorFilter filter){} @Override public int getOpacity(){return PixelFormat.TRANSLUCENT;}};
+    }
     private TextView text(String s,int size,int color,boolean bold){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);if(bold)t.setTypeface(null,Typeface.BOLD);return t;}
     private LinearLayout vertical(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
     private void pad(View v,int n){v.setPadding(dp(n),dp(n),dp(n),dp(n));}
     private TextView action(String title,Runnable r){TextView t=text(title,15,ACCENT,true);pad(t,12);t.setGravity(Gravity.CENTER);t.setOnClickListener(v->r.run());return t;}
-    private void show(){if(data==null)return;root=vertical();root.setBackgroundColor(BG);setContentView(root);
+    private void show(){if(data==null)return;root=vertical();root.setBackgroundColor(BG);
+        root.setOnApplyWindowInsetsListener((view,insets)->{
+            int left,top,right,bottom;
+            if(android.os.Build.VERSION.SDK_INT>=30){
+                int types=WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout();
+                if(android.os.Build.VERSION.SDK_INT>=35)types|=WindowInsets.Type.ime();
+                android.graphics.Insets safe=insets.getInsets(types);
+                left=safe.left;top=safe.top;right=safe.right;bottom=safe.bottom;
+            }else{left=insets.getSystemWindowInsetLeft();top=insets.getSystemWindowInsetTop();right=insets.getSystemWindowInsetRight();bottom=insets.getSystemWindowInsetBottom();}
+            view.setPadding(left,top,right,bottom);return insets;
+        });
+        setContentView(root);root.requestApplyInsets();
         LinearLayout header=vertical();header.setBackgroundColor(SURFACE);header.setPadding(dp(20),dp(18),dp(20),dp(12));root.addView(header);
         TextView brand=text("CODE KANBAN",12,ACCENT,true);header.addView(brand);
         String title=tab.equals("boards")?(board()==null?"Your boards":board().optString("name")):tab.equals("all")?"Across boards":tab.equals("backup")?"Backup & restore":"Default board";
@@ -94,15 +119,16 @@ public class MainActivity extends Activity {
         }catch(JSONException e){error("Invalid default template",e.getMessage());}}
     private void error(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK",null).show();}
     private JSONObject newColumn(String name,String color){return put(put(put(put(obj(),"id",id()),"name",name),"color",color),"cards",arr());}
-    private void boardView(){dropColumns.clear();JSONObject b=board();if(b==null){current="";show();return;}String bid=current;
+    private void boardView(){dropColumns.clear();dropBoards.clear();JSONObject b=board();if(b==null){current="";show();return;}String bid=current;
         LinearLayout row=new LinearLayout(this);row.addView(action("‹ Back",()->{if(b.optString("parent").isEmpty()){current="";show();}else openBoard(b.optString("parent"));}));row.addView(action("+ Nested board",()->newBoard(bid)));row.addView(action("⋮",()->boardMenu(b)));content.addView(row);
         JSONArray boards=array(data,"boards");boolean children=false;for(int i=0;i<boards.length();i++){JSONObject child=at(boards,i);if(bid.equals(child.optString("parent"))){if(!children)section("Nested boards");children=true;boardTile(child);}}
+        dragBoardTargets=vertical();dragBoardTargets.setVisibility(View.GONE);content.addView(dragBoardTargets);TextView hint=text("DROP ON A BOARD TO MOVE",13,MUTED,true);pad(hint,10);dragBoardTargets.addView(hint);for(int i=0;i<boards.length();i++){JSONObject target=at(boards,i);if(target==b)continue;TextView destination=text("▦  "+path(target),16,INK,true);pad(destination,14);destination.setBackground(shape(SURFACE,BORDER));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(8);dragBoardTargets.addView(destination,p);dropBoards.put(destination,target);}
         section("Columns");JSONArray cols=array(b,"columns");for(int i=0;i<cols.length();i++)columnView(b,at(cols,i));button("+ Add column",()->input("Add column","Column name","",name->{cols.put(newColumn(name,palette[cols.length()%palette.length]));save();show();}));
     }
     private void boardMenu(JSONObject b){new AlertDialog.Builder(this).setTitle(b.optString("name")).setItems(new String[]{"Rename board","Apply default layout","Use columns as default","Delete board"},(d,w)->{if(w==1)checkDefault(b,true);else if(w==2)useBoardAsDefault(b);else if(w==0)input("Rename board","Board name",b.optString("name"),n->{put(b,"name",n);save();show();});else new AlertDialog.Builder(this).setTitle("Delete board?").setMessage("This deletes the board, all nested boards, and their work items.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(x,y)->{String parent=b.optString("parent");deleteTree(b.optString("id"));current=parent;save();show();}).show();}).show();}
     private void deleteTree(String id){JSONArray bs=array(data,"boards");ArrayList<String> children=new ArrayList<>();for(int i=0;i<bs.length();i++)if(id.equals(at(bs,i).optString("parent")))children.add(at(bs,i).optString("id"));for(String child:children)deleteTree(child);remove(bs,id);}
     private void columnView(JSONObject b,JSONObject c){
-        LinearLayout box=tile();dropColumns.put(box,c);LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);box.addView(head);
+        LinearLayout box=tile();box.setBackground(columnBackground(c,false));dropColumns.put(box,c);LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);box.addView(head);
         TextView toggle=text(c.optBoolean("collapsed")?"▸  ":"▾  ",20,INK,true);head.addView(toggle);
         TextView dot=text("●  ",20,parseColor(c.optString("color")),true);head.addView(dot);
         TextView title=text(c.optString("name")+"  "+array(c,"cards").length(),17,INK,true);head.addView(title,new LinearLayout.LayoutParams(0,-2,1));head.addView(action("⋮",()->columnMenu(b,c)));
@@ -113,12 +139,27 @@ public class MainActivity extends Activity {
     }
     private int parseColor(String s){try{return Color.parseColor(s);}catch(Exception e){return ACCENT;}}
     private void cardMenu(JSONObject b,JSONObject c,JSONObject card){
-        new AlertDialog.Builder(this).setTitle(card.optString("title")).setItems(new String[]{"Edit", "Move to column", "Delete"},(dialog,choice)->{
+        new AlertDialog.Builder(this).setTitle(card.optString("title")).setItems(new String[]{"Edit", "Move to column", "Move to board", "Set or clear parent", "Convert task to work item", "Convert work item to task", "Delete"},(dialog,choice)->{
             if(choice==0)editCard(b,c,card);
             else if(choice==1)moveCard(b,c,card);
-            else new AlertDialog.Builder(this).setTitle("Delete work item?").setMessage("This permanently deletes the work item.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->{remove(array(c,"cards"),card.optString("id"));save();show();}).show();
+            else if(choice==2)chooseBoard(b,card);
+            else if(choice==3)chooseParent(b,card);
+            else if(choice==4)chooseTaskToConvert(b,card);
+            else if(choice==5)convertToTask(b,card);
+            else new AlertDialog.Builder(this).setTitle("Delete work item?").setMessage("This permanently deletes the item and removes its children's parent links.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->mutateBoard(b, draft->{WorkItemRelations.Entry entry=WorkItemRelations.find(draft,card.optString("id"));if(entry==null)throw new JSONException("Work item not found.");if(WorkItemRelations.hasArchivedChild(draft,card.optString("id")))throw new JSONException("This item has archived children; deleting it is not supported yet.");for(WorkItemRelations.Entry item:WorkItemRelations.entries(draft))if(card.optString("id").equals(item.card.optString("parentId")))item.card.remove("parentId");WorkItemRelations.remove(entry.column,entry.card);})).show();
         }).show();
     }
+    interface BoardMutation{void apply(JSONObject board) throws JSONException;}
+    private void mutateBoard(JSONObject original,BoardMutation action){JSONObject previous=data;try{JSONObject draft=new JSONObject(data.toString());JSONObject board=find(array(draft,"boards"),original.optString("id"));if(board==null)throw new JSONException("Board not found.");action.apply(board);data=draft;if(!save())data=previous;show();}catch(JSONException e){data=previous;error("Could not update work item",e.getMessage());}}
+    private void chooseParent(JSONObject board,JSONObject card){try{ArrayList<WorkItemRelations.Entry> choices=new ArrayList<>();for(WorkItemRelations.Entry e:WorkItemRelations.entries(board))if(WorkItemRelations.canParent(board,card.optString("id"),e.card.optString("id")))choices.add(e);String[] names=new String[choices.size()+1];names[0]="No parent";for(int i=0;i<choices.size();i++)names[i+1]=choices.get(i).card.optString("title")+" · "+choices.get(i).column.optString("name");new AlertDialog.Builder(this).setTitle("Choose parent").setItems(names,(d,n)->mutateBoard(board,draft->WorkItemRelations.setParent(draft,card.optString("id"),n==0?"":choices.get(n-1).card.optString("id")))).show();}catch(JSONException e){error("Cannot choose parent",e.getMessage());}}
+    private void chooseTaskToConvert(JSONObject board,JSONObject card){JSONArray tasks=array(card,"tasks");if(tasks.length()==0){error("No tasks","Add a checklist task first.");return;}String[] names=new String[tasks.length()];for(int i=0;i<names.length;i++)names[i]=at(tasks,i).optString("title");new AlertDialog.Builder(this).setTitle("Convert task to work item").setItems(names,(d,n)->{String id=at(tasks,n).optString("id");mutateBoard(board,draft->WorkItemRelations.taskToCard(draft,card.optString("id"),id));}).show();}
+    private void convertToTask(JSONObject board,JSONObject card){new AlertDialog.Builder(this).setTitle("Convert to task?").setMessage("The item becomes a checklist task on its parent. Only its title and completion state are kept; description, labels, comments and other fields will be removed. The item must have a parent and no tasks or children.").setNegativeButton("Cancel",null).setPositiveButton("Convert",(d,w)->mutateBoard(board,draft->WorkItemRelations.cardToTask(draft,card.optString("id")))).show();}
+    private void chooseBoard(JSONObject source,JSONObject card){JSONArray boards=array(data,"boards");ArrayList<JSONObject> targets=new ArrayList<>();for(int i=0;i<boards.length();i++)if(at(boards,i)!=source)targets.add(at(boards,i));if(targets.isEmpty()){error("No other boards","Create another board first.");return;}String[] names=new String[targets.size()];for(int i=0;i<names.length;i++)names[i]=path(targets.get(i));new AlertDialog.Builder(this).setTitle("Move to board").setItems(names,(d,n)->moveAcrossBoards(source,targets.get(n),card)).show();}
+    private void moveAcrossBoards(JSONObject source,JSONObject destination,JSONObject card){
+        if(!card.optString("parentId").isEmpty()){new AlertDialog.Builder(this).setTitle("Move parent family?").setMessage("Move the root parent and all descendants, or move this item and its descendants and detach it from its parent.").setNegativeButton("Cancel",null).setNeutralButton("This item",(d,w)->applyBoardMove(source,destination,card,false)).setPositiveButton("Root family",(d,w)->applyBoardMove(source,destination,card,true)).show();}
+        else applyBoardMove(source,destination,card,false);
+    }
+    private void applyBoardMove(JSONObject source,JSONObject destination,JSONObject card,boolean root){JSONObject previous=data;try{JSONObject draft=new JSONObject(data.toString());JSONObject from=find(array(draft,"boards"),source.optString("id")),to=find(array(draft,"boards"),destination.optString("id"));if(from==null||to==null)throw new JSONException("Board no longer exists.");WorkItemRelations.moveFamily(from,to,card.optString("id"),root);data=draft;if(!save()){data=previous;return;}show();Toast.makeText(this,"Moved to "+path(find(array(data,"boards"),destination.optString("id"))),Toast.LENGTH_SHORT).show();}catch(JSONException e){data=previous;error("Could not move work item",e.getMessage());}}
     /** Touches scroll normally until a stationary long press picks up a card. */
     private final class CardTouch implements View.OnTouchListener {
         private static final long MENU_RELEASE_WINDOW_MS=500;
@@ -154,7 +195,7 @@ public class MainActivity extends Activity {
                 case android.view.MotionEvent.ACTION_UP:
                     if(cancelled)return true;
                     x=event.getRawX();y=event.getRawY();view.removeCallbacks(pickup);
-                    if(held&&moved){updateTarget();JSONObject destination=highlight==null?null:dropColumns.get(highlight);int scrollY=boardScroll.getScrollY();cleanup();if(destination!=null&&destination!=from){if(transferCard(from,destination,card)){view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);show();boardScroll.post(()->boardScroll.scrollTo(0,scrollY));}}else if(destination==null)Toast.makeText(MainActivity.this,"Drop on a column to move",Toast.LENGTH_SHORT).show();}
+                    if(held&&moved){updateTarget();JSONObject destination=highlight==null?null:dropColumns.get(highlight),otherBoard=highlight==null?null:dropBoards.get(highlight);int scrollY=boardScroll.getScrollY();cleanup();if(otherBoard!=null){view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);moveAcrossBoards(board,otherBoard,card);}else if(destination!=null&&destination!=from){if(transferCard(from,destination,card)){view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);show();boardScroll.post(()->boardScroll.scrollTo(0,scrollY));}}else if(destination==null)Toast.makeText(MainActivity.this,"Drop on a column or board to move",Toast.LENGTH_SHORT).show();}
                     else if(held){boolean quickRelease=event.getEventTime()-pickedUpAt>=0 && event.getEventTime()-pickedUpAt<=MENU_RELEASE_WINDOW_MS;cleanup();if(quickRelease)cardMenu(board,from,card);}
                     else {cleanup();if(!moved)view.performClick();}
                     return true;
@@ -165,6 +206,7 @@ public class MainActivity extends Activity {
             }
         }
         private void createGhost(){
+            if(dragBoardTargets!=null&&!dropBoards.isEmpty())dragBoardTargets.setVisibility(View.VISIBLE);
             ghost=text(card.optString("title"),16,INK,true);pad(ghost,14);ghost.setBackground(shape(SURFACE,ACCENT));ghost.setElevation(dp(12));
             int width=Math.min(source.getWidth(),root.getWidth()-dp(32));
             ghost.measure(View.MeasureSpec.makeMeasureSpec(Math.max(1,width),View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(dp(100),View.MeasureSpec.AT_MOST));
@@ -173,18 +215,20 @@ public class MainActivity extends Activity {
         private void positionGhost(){if(ghost==null)return;int[] loc=new int[2];root.getLocationOnScreen(loc);ghost.setTranslationX(x-loc[0]-ghost.getWidth()/2f);ghost.setTranslationY(y-loc[1]-ghost.getHeight()/2f);}
         private void updateTarget(){
             View target=null;Rect r=new Rect();for(View column:dropColumns.keySet())if(column.getGlobalVisibleRect(r)&&r.contains((int)x,(int)y)){target=column;break;}
-            if(target==highlight)return;if(highlight!=null)highlight.setBackground(shape(SURFACE,BORDER));highlight=target;
-            if(highlight!=null){highlight.setBackground(shape(SURFACE,ACCENT));source.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
+            if(target==null)for(View board:dropBoards.keySet())if(board.getGlobalVisibleRect(r)&&r.contains((int)x,(int)y)){target=board;break;}
+            if(target==highlight)return;if(highlight!=null)highlight.setBackground(dropColumns.containsKey(highlight)?columnBackground(dropColumns.get(highlight),false):shape(SURFACE,BORDER));highlight=target;
+            if(highlight!=null){highlight.setBackground(dropColumns.containsKey(highlight)?columnBackground(dropColumns.get(highlight),true):shape(SURFACE,ACCENT));source.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
         }
         private void cleanup(){
             if(source!=null){source.removeCallbacks(pickup);source.setAlpha(1f);if(source.getParent()!=null)source.getParent().requestDisallowInterceptTouchEvent(false);}
             if(boardScroll!=null)boardScroll.removeCallbacks(scrollTick);scrollScheduled=false;
-            if(highlight!=null)highlight.setBackground(shape(SURFACE,BORDER));highlight=null;
+            if(highlight!=null)highlight.setBackground(dropColumns.containsKey(highlight)?columnBackground(dropColumns.get(highlight),false):shape(SURFACE,BORDER));highlight=null;
+            if(dragBoardTargets!=null)dragBoardTargets.setVisibility(View.GONE);
             if(ghost!=null){root.getOverlay().remove(ghost);ghost=null;}held=false;
         }
     }
     private String summary(JSONObject c){JSONArray tasks=array(c,"tasks");int done=0;for(int i=0;i<tasks.length();i++)if(at(tasks,i).optBoolean("done"))done++;String due=c.optString("due");return (tasks.length()>0?"\n✓ "+done+"/"+tasks.length():"")+(due.isEmpty()?"":"   ◷ "+due);}
-    private void columnMenu(JSONObject b,JSONObject c){new AlertDialog.Builder(this).setTitle(c.optString("name")).setItems(new String[]{"Rename","Change color","Delete column"},(d,w)->{if(w==0)input("Rename column","Name",c.optString("name"),s->{put(c,"name",s);save();show();});else if(w==1)new AlertDialog.Builder(this).setTitle("Column color").setItems(new String[]{"Indigo","Teal","Amber","Rose","Blue","Purple"},(x,n)->{put(c,"color",palette[n]);save();show();}).show();else if(array(b,"columns").length()==1)Toast.makeText(this,"Keep at least one column",Toast.LENGTH_SHORT).show();else new AlertDialog.Builder(this).setTitle("Delete column?").setMessage("Its work items will also be deleted.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(x,n)->{remove(array(b,"columns"),c.optString("id"));save();show();}).show();}).show();}
+    private void columnMenu(JSONObject b,JSONObject c){new AlertDialog.Builder(this).setTitle(c.optString("name")).setItems(new String[]{"Rename","Change color","Delete column"},(d,w)->{if(w==0)input("Rename column","Name",c.optString("name"),s->{put(c,"name",s);save();show();});else if(w==1)new AlertDialog.Builder(this).setTitle("Column color").setItems(new String[]{"Indigo","Teal","Amber","Rose","Blue","Purple"},(x,n)->{put(c,"color",palette[n]);save();show();}).show();else if(array(b,"columns").length()==1)Toast.makeText(this,"Keep at least one column",Toast.LENGTH_SHORT).show();else new AlertDialog.Builder(this).setTitle("Delete column?").setMessage("Its work items will be deleted, and children in other columns will be detached.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(x,n)->mutateBoard(b,draft->{JSONObject removed=find(array(draft,"columns"),c.optString("id"));if(removed==null)throw new JSONException("Column not found.");Set<String> ids=new HashSet<>();JSONArray cards=array(removed,"cards");for(int i=0;i<cards.length();i++){String id=at(cards,i).optString("id");if(WorkItemRelations.hasArchivedChild(draft,id))throw new JSONException("A work item has archived children; deleting this column is not supported yet.");ids.add(id);}for(WorkItemRelations.Entry item:WorkItemRelations.entries(draft))if(ids.contains(item.card.optString("parentId")))item.card.remove("parentId");remove(array(draft,"columns"),c.optString("id"));})).show();}).show();}
     private void all(){EditText search=new EditText(this);search.setSingleLine();search.setHint("Search work items");content.addView(search);LinearLayout results=vertical();content.addView(results);Runnable render=()->{results.removeAllViews();String q=search.getText().toString().trim().toLowerCase(Locale.ROOT);int count=0;JSONArray bs=array(data,"boards");for(int i=0;i<bs.length();i++){JSONObject b=at(bs,i);JSONArray cs=array(b,"columns");for(int j=0;j<cs.length();j++){JSONObject c=at(cs,j);JSONArray cards=array(c,"cards");for(int k=0;k<cards.length();k++){JSONObject card=at(cards,k);if(!card.toString().toLowerCase(Locale.ROOT).contains(q))continue;count++;TextView t=text(card.optString("title")+"\n"+path(b)+"  ·  "+c.optString("name")+summary(card),16,INK,false);pad(t,16);t.setBackground(shape(SURFACE,BORDER));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(8);results.addView(t,p);t.setOnClickListener(v->editCard(b,c,card));}}}if(count==0){TextView t=text("No matching work items",15,MUTED,false);pad(t,16);results.addView(t);}};search.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int count,int after){}public void onTextChanged(CharSequence s,int st,int before,int count){render.run();}public void afterTextChanged(android.text.Editable e){}});render.run();}
     private void backupView(){
         String tree=getPreferences(MODE_PRIVATE).getString("backupTree","");
@@ -229,8 +273,10 @@ public class MainActivity extends Activity {
     private EditText field(LinearLayout l,String label,String value,boolean multi){TextView t=text(label,13,MUTED,true);t.setPadding(0,dp(12),0,0);l.addView(t);EditText e=new EditText(this);e.setText(value);if(multi){e.setMinLines(2);e.setGravity(Gravity.TOP);e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);}else e.setSingleLine();l.addView(e);return e;}
     private void editCard(JSONObject b,JSONObject c,JSONObject card){ScrollView sc=new ScrollView(this);LinearLayout form=vertical();pad(form,20);sc.addView(form);EditText title=field(form,"Title",card.optString("title"),false),desc=field(form,"Description",card.optString("description"),true),labels=field(form,"Labels (comma separated)",card.optString("labels"),false),due=field(form,"Due date (e.g. 2026-12-31)",card.optString("due"),false),points=field(form,"Story points",card.optString("points"),false),priority=field(form,"Priority",card.optString("priority"),false),difficulty=field(form,"Difficulty",card.optString("difficulty"),false),ado=field(form,"ADO work item",card.optString("ado"),false),sm=field(form,"SM item",card.optString("sm"),false);
         TextView taskHead=text("CHECKLIST",13,MUTED,true);taskHead.setPadding(0,dp(20),0,dp(8));form.addView(taskHead);JSONArray tasks;try{tasks=new JSONArray(array(card,"tasks").toString());}catch(JSONException ex){throw new IllegalStateException(ex);}LinearLayout taskBox=vertical();form.addView(taskBox);Runnable taskRender=()->{taskBox.removeAllViews();for(int i=0;i<tasks.length();i++){JSONObject task=at(tasks,i);LinearLayout row=new LinearLayout(this);CheckBox check=new CheckBox(this);check.setText(task.optString("title"));check.setChecked(task.optBoolean("done"));row.addView(check,new LinearLayout.LayoutParams(0,-2,1));check.setOnCheckedChangeListener((v,on)->put(task,"done",on));row.addView(action("×",()->{remove(tasks,task.optString("id"));editCardRefresh(taskBox,tasks);}));taskBox.addView(row);}};taskRender.run();form.addView(action("+ Add task",()->input("Add task","Task","",s->{tasks.put(put(put(put(obj(),"id",id()),"title",s),"done",false));editCardRefresh(taskBox,tasks);})) );
+        TextView relations=text("RELATIONSHIPS",13,MUTED,true);relations.setPadding(0,dp(20),0,dp(8));form.addView(relations);
+        try{WorkItemRelations.Entry parent=WorkItemRelations.find(b,card.optString("parentId"));form.addView(text(parent==null?"Parent: none":"Parent: "+parent.card.optString("title"),15,INK,false));int children=0;for(WorkItemRelations.Entry e:WorkItemRelations.entries(b))if(card.optString("id").equals(e.card.optString("parentId"))){form.addView(text("Child: "+e.card.optString("title"),15,INK,false));children++;}if(children==0)form.addView(text("No child work items",14,MUTED,false));form.addView(text("Use More to change parent or convert items and tasks.",13,MUTED,false));}catch(JSONException e){form.addView(text("Unable to load relationships",14,MUTED,false));}
         EditText comments=field(form,"Comments (one per line)",card.optString("commentsText"),true);
-        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Work item").setView(sc).setNegativeButton("Cancel",(d,w)->show()).setNeutralButton("More",null).setPositiveButton("Save",null).create();dialog.setOnShowListener(x->{dialog.getButton(-1).setOnClickListener(v->{String s=title.getText().toString().trim();if(s.isEmpty()){title.setError("Required");return;}put(card,"tasks",tasks);put(card,"title",s);put(card,"description",desc.getText().toString());put(card,"labels",labels.getText().toString());put(card,"due",due.getText().toString());put(card,"points",points.getText().toString());put(card,"priority",priority.getText().toString());put(card,"difficulty",difficulty.getText().toString());put(card,"ado",ado.getText().toString());put(card,"sm",sm.getText().toString());put(card,"commentsText",comments.getText().toString());save();dialog.dismiss();show();});dialog.getButton(-3).setOnClickListener(v->{dialog.dismiss();new AlertDialog.Builder(this).setItems(new String[]{"Move to column","Delete work item"},(d,w)->{if(w==0)moveCard(b,c,card);else new AlertDialog.Builder(this).setTitle("Delete work item?").setNegativeButton("Cancel",(a,z)->show()).setPositiveButton("Delete",(a,z)->{remove(array(c,"cards"),card.optString("id"));save();show();}).show();}).setOnCancelListener(d->show()).show();});});dialog.show();}
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Work item").setView(sc).setNegativeButton("Cancel",(d,w)->show()).setNeutralButton("More",null).setPositiveButton("Save",null).create();dialog.setOnShowListener(x->{dialog.getButton(-1).setOnClickListener(v->{String s=title.getText().toString().trim();if(s.isEmpty()){title.setError("Required");return;}put(card,"tasks",tasks);put(card,"title",s);put(card,"description",desc.getText().toString());put(card,"labels",labels.getText().toString());put(card,"due",due.getText().toString());put(card,"points",points.getText().toString());put(card,"priority",priority.getText().toString());put(card,"difficulty",difficulty.getText().toString());put(card,"ado",ado.getText().toString());put(card,"sm",sm.getText().toString());put(card,"commentsText",comments.getText().toString());save();dialog.dismiss();show();});dialog.getButton(-3).setOnClickListener(v->{dialog.dismiss();cardMenu(b,c,card);});});dialog.show();}
     private void editCardRefresh(LinearLayout box,JSONArray tasks){box.removeAllViews();for(int i=0;i<tasks.length();i++){JSONObject t=at(tasks,i);LinearLayout row=new LinearLayout(this);CheckBox cb=new CheckBox(this);cb.setText(t.optString("title"));cb.setChecked(t.optBoolean("done"));cb.setOnCheckedChangeListener((v,on)->put(t,"done",on));row.addView(cb,new LinearLayout.LayoutParams(0,-2,1));row.addView(action("×",()->{remove(tasks,t.optString("id"));editCardRefresh(box,tasks);}));box.addView(row);}}
     private boolean transferCard(JSONObject from,JSONObject to,JSONObject card){
         return CardMoves.transfer(from,to,card,this::save);

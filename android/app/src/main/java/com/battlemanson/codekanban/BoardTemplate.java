@@ -57,6 +57,7 @@ final class BoardTemplate {
     }
     static JSONObject convertCard(JSONObject source) throws JSONException {
         JSONObject card = new JSONObject().put("id", source.optString("id", id())).put("title", source.optString("title"));
+        if(source.has("parentId")&&!source.isNull("parentId"))card.put("parentId",source.getString("parentId"));
         card.put("description", source.optString("description", ""));
         card.put("due", source.optString("deadline", source.optString("dueDate", "")));
         for (String[] field : new String[][]{{"storyPoints","points"},{"priority","priority"},{"difficultyEstimation","difficulty"},{"adoWorkItem","ado"},{"smItem","sm"}})
