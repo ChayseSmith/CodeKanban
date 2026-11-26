@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@vscode/vsce": "^3.9.2",
+    "node": "^24.22.2"
+  }
+}
