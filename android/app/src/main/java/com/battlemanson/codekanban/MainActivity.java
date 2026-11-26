@@ -1,8 +1,11 @@
 package com.battlemanson.codekanban;
 
 import android.app.*;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
@@ -12,10 +15,16 @@ import org.json.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private int INK, MUTED, ACCENT, BG, SURFACE, BORDER; private boolean dark;
-    private JSONObject data; private String current="", tab="boards"; private LinearLayout root, content;
+    private JSONObject data; private String current="", tab="boards"; private LinearLayout root, content; private ScrollView boardScroll;
+    private static final int PICK_BACKUP_FOLDER=1001,PICK_RESTORE_FILE=1002;
+    private static final ExecutorService BACKUPS=Executors.newSingleThreadExecutor();
+    private static final java.util.concurrent.atomic.AtomicLong BACKUP_SEQUENCE=new java.util.concurrent.atomic.AtomicLong();
+    private final Map<View,JSONObject> dropColumns=new LinkedHashMap<>();
     private final String[] palette={"#6366f1","#0d9488","#f59e0b","#e11d48","#0284c7","#9333ea"};
     private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     private JSONObject obj(){return new JSONObject();} private JSONArray arr(){return new JSONArray();}
@@ -48,7 +57,7 @@ public class MainActivity extends Activity {
         catch(FileNotFoundException e){data=obj();array(data,"boards");put(data,"defaults",new JSONArray(Arrays.asList("Backlog","To Do","Doing","Done")));}
         catch(Exception e){new AlertDialog.Builder(this).setTitle("Unable to open boards").setMessage("Your saved data could not be read. It has not been replaced. Close the app and recover it before continuing.\n\n"+e.getMessage()).setPositiveButton("Close",(d,w)->finish()).setCancelable(false).show();data=null;}
     }
-    private boolean save(){android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;try{out=file.startWrite();out.write(data.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);return true;}catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}}
+    private boolean save(){android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;try{out=file.startWrite();out.write(data.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);queueBackup();return true;}catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}}
     private GradientDrawable shape(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(16));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
     private TextView text(String s,int size,int color,boolean bold){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);if(bold)t.setTypeface(null,Typeface.BOLD);return t;}
     private LinearLayout vertical(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
@@ -57,12 +66,12 @@ public class MainActivity extends Activity {
     private void show(){if(data==null)return;root=vertical();root.setBackgroundColor(BG);setContentView(root);
         LinearLayout header=vertical();header.setBackgroundColor(SURFACE);header.setPadding(dp(20),dp(18),dp(20),dp(12));root.addView(header);
         TextView brand=text("CODE KANBAN",12,ACCENT,true);header.addView(brand);
-        String title=tab.equals("boards")?(board()==null?"Your boards":board().optString("name")):tab.equals("all")?"Across boards":"Default board";
-        TextView h=text(title,27,INK,true);header.addView(h);TextView sub=text(tab.equals("boards")?(board()==null?"Organize work, your way":"Board · "+path(board())):tab.equals("all")?"Work items from every board":"New boards start with these columns",13,MUTED,false);header.addView(sub);
+        String title=tab.equals("boards")?(board()==null?"Your boards":board().optString("name")):tab.equals("all")?"Across boards":tab.equals("backup")?"Backup & restore":"Default board";
+        TextView h=text(title,27,INK,true);header.addView(h);TextView sub=text(tab.equals("boards")?(board()==null?"Organize work, your way":"Board · "+path(board())):tab.equals("all")?"Work items from every board":tab.equals("backup")?"Keep your boards outside the app":"New boards start with these columns",13,MUTED,false);header.addView(sub);
         HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);LinearLayout nav=new LinearLayout(this);scroll.addView(nav);header.addView(scroll);
-        nav.addView(action("Boards",()->{tab="boards";show();}));nav.addView(action("All work",()->{tab="all";show();}));nav.addView(action("Defaults",()->{tab="defaults";show();}));
-        ScrollView sv=new ScrollView(this);sv.setFillViewport(true);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));content=vertical();content.setPadding(dp(16),dp(16),dp(16),dp(28));sv.addView(content);
-        if(tab.equals("defaults"))defaults();else if(tab.equals("all"))all();else if(board()==null)boards();else boardView();
+        nav.addView(action("Boards",()->{tab="boards";show();}));nav.addView(action("All work",()->{tab="all";show();}));nav.addView(action("Defaults",()->{tab="defaults";show();}));nav.addView(action("Backup",()->{tab="backup";show();}));
+        ScrollView sv=new ScrollView(this);boardScroll=sv;sv.setFillViewport(true);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));content=vertical();content.setPadding(dp(16),dp(16),dp(16),dp(28));sv.addView(content);
+        if(tab.equals("defaults"))defaults();else if(tab.equals("all"))all();else if(tab.equals("backup"))backupView();else if(board()==null)boards();else boardView();
     }
     private String path(JSONObject b){ArrayList<String> parts=new ArrayList<>();HashSet<String> seen=new HashSet<>();while(b!=null&&seen.add(b.optString("id"))){parts.add(b.optString("name"));b=find(array(data,"boards"),b.optString("parent"));}Collections.reverse(parts);return android.text.TextUtils.join(" / ",parts);}
     private void section(String s){TextView t=text(s,18,INK,true);t.setPadding(dp(4),dp(18),dp(4),dp(10));content.addView(t);}
@@ -85,21 +94,126 @@ public class MainActivity extends Activity {
         }catch(JSONException e){error("Invalid default template",e.getMessage());}}
     private void error(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK",null).show();}
     private JSONObject newColumn(String name,String color){return put(put(put(put(obj(),"id",id()),"name",name),"color",color),"cards",arr());}
-    private void boardView(){JSONObject b=board();if(b==null){current="";show();return;}String bid=current;
+    private void boardView(){dropColumns.clear();JSONObject b=board();if(b==null){current="";show();return;}String bid=current;
         LinearLayout row=new LinearLayout(this);row.addView(action("‹ Back",()->{if(b.optString("parent").isEmpty()){current="";show();}else openBoard(b.optString("parent"));}));row.addView(action("+ Nested board",()->newBoard(bid)));row.addView(action("⋮",()->boardMenu(b)));content.addView(row);
         JSONArray boards=array(data,"boards");boolean children=false;for(int i=0;i<boards.length();i++){JSONObject child=at(boards,i);if(bid.equals(child.optString("parent"))){if(!children)section("Nested boards");children=true;boardTile(child);}}
         section("Columns");JSONArray cols=array(b,"columns");for(int i=0;i<cols.length();i++)columnView(b,at(cols,i));button("+ Add column",()->input("Add column","Column name","",name->{cols.put(newColumn(name,palette[cols.length()%palette.length]));save();show();}));
     }
     private void boardMenu(JSONObject b){new AlertDialog.Builder(this).setTitle(b.optString("name")).setItems(new String[]{"Rename board","Apply default layout","Use columns as default","Delete board"},(d,w)->{if(w==1)checkDefault(b,true);else if(w==2)useBoardAsDefault(b);else if(w==0)input("Rename board","Board name",b.optString("name"),n->{put(b,"name",n);save();show();});else new AlertDialog.Builder(this).setTitle("Delete board?").setMessage("This deletes the board, all nested boards, and their work items.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(x,y)->{String parent=b.optString("parent");deleteTree(b.optString("id"));current=parent;save();show();}).show();}).show();}
     private void deleteTree(String id){JSONArray bs=array(data,"boards");ArrayList<String> children=new ArrayList<>();for(int i=0;i<bs.length();i++)if(id.equals(at(bs,i).optString("parent")))children.add(at(bs,i).optString("id"));for(String child:children)deleteTree(child);remove(bs,id);}
-    private void columnView(JSONObject b,JSONObject c){LinearLayout box=tile();LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);box.addView(head);TextView dot=text("●  ",20,parseColor(c.optString("color")),true);head.addView(dot);TextView title=text(c.optString("name")+"  "+array(c,"cards").length(),17,INK,true);head.addView(title,new LinearLayout.LayoutParams(0,-2,1));head.addView(action("⋮",()->columnMenu(b,c)));
-        JSONArray cards=array(c,"cards");for(int i=0;i<cards.length();i++){JSONObject card=at(cards,i);TextView t=text(card.optString("title")+summary(card),16,INK,false);t.setPadding(dp(12),dp(14),dp(12),dp(14));t.setBackground(shape(BG,0));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(7);box.addView(t,p);t.setOnClickListener(v->editCard(b,c,card));}box.addView(action("+ Add work item",()->input("New work item","Title","",name->{JSONObject card=put(put(put(obj(),"id",id()),"title",name),"tasks",arr());put(card,"comments",arr());cards.put(card);save();show();})));}
+    private void columnView(JSONObject b,JSONObject c){
+        LinearLayout box=tile();dropColumns.put(box,c);LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);box.addView(head);
+        TextView toggle=text(c.optBoolean("collapsed")?"▸  ":"▾  ",20,INK,true);head.addView(toggle);
+        TextView dot=text("●  ",20,parseColor(c.optString("color")),true);head.addView(dot);
+        TextView title=text(c.optString("name")+"  "+array(c,"cards").length(),17,INK,true);head.addView(title,new LinearLayout.LayoutParams(0,-2,1));head.addView(action("⋮",()->columnMenu(b,c)));
+        LinearLayout body=vertical();box.addView(body);body.setVisibility(c.optBoolean("collapsed")?View.GONE:View.VISIBLE);
+        head.setContentDescription((c.optBoolean("collapsed")?"Expand ":"Collapse ")+c.optString("name"));
+        head.setOnClickListener(v->{boolean was=c.optBoolean("collapsed"),next=!was;put(c,"collapsed",next);if(!save()){put(c,"collapsed",was);return;}body.setVisibility(next?View.GONE:View.VISIBLE);toggle.setText(next?"▸  ":"▾  ");head.setContentDescription((next?"Expand ":"Collapse ")+c.optString("name"));});
+        JSONArray cards=array(c,"cards");for(int i=0;i<cards.length();i++){JSONObject card=at(cards,i);TextView t=text(card.optString("title")+summary(card),16,INK,false);t.setPadding(dp(12),dp(14),dp(12),dp(14));t.setBackground(shape(BG,0));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(7);body.addView(t,p);t.setOnClickListener(v->editCard(b,c,card));t.setOnLongClickListener(v->{v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);cardMenu(b,c,card);return true;});t.setOnTouchListener(new CardTouch(b,c,card));}body.addView(action("+ Add work item",()->input("New work item","Title","",name->{JSONObject card=put(put(put(obj(),"id",id()),"title",name),"tasks",arr());put(card,"comments",arr());cards.put(card);save();show();})));
+    }
     private int parseColor(String s){try{return Color.parseColor(s);}catch(Exception e){return ACCENT;}}
+    private void cardMenu(JSONObject b,JSONObject c,JSONObject card){
+        new AlertDialog.Builder(this).setTitle(card.optString("title")).setItems(new String[]{"Edit", "Move to column", "Delete"},(dialog,choice)->{
+            if(choice==0)editCard(b,c,card);
+            else if(choice==1)moveCard(b,c,card);
+            else new AlertDialog.Builder(this).setTitle("Delete work item?").setMessage("This permanently deletes the work item.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->{remove(array(c,"cards"),card.optString("id"));save();show();}).show();
+        }).show();
+    }
+    /** Touches scroll normally until a stationary long press picks up a card. */
+    private final class CardTouch implements View.OnTouchListener {
+        private static final long MENU_RELEASE_WINDOW_MS=500;
+        private final JSONObject board,from,card;
+        private final int slop=ViewConfiguration.get(MainActivity.this).getScaledTouchSlop();
+        private View source,highlight; private TextView ghost;
+        private boolean held,moved,cancelled,scrollScheduled; private float downX,downY,x,y; private long pickedUpAt;
+        private final Runnable pickup=()->{
+            if(cancelled||source==null)return;
+            held=true;pickedUpAt=android.os.SystemClock.uptimeMillis();source.getParent().requestDisallowInterceptTouchEvent(true);
+            source.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            source.setAlpha(.45f);
+        };
+        private final Runnable scrollTick=new Runnable(){@Override public void run(){
+            scrollScheduled=false;if(!held||!moved||boardScroll==null)return;
+            Rect visible=new Rect();if(!boardScroll.getGlobalVisibleRect(visible))return;
+            int edge=dp(56), speed=dp(12), delta=y<visible.top+edge?-speed:y>visible.bottom-edge?speed:0;
+            if(delta==0)return;int before=boardScroll.getScrollY();boardScroll.scrollBy(0,delta);updateTarget();
+            if(boardScroll.getScrollY()!=before){scrollScheduled=true;boardScroll.postOnAnimation(this);}
+        }};
+        CardTouch(JSONObject board,JSONObject from,JSONObject card){this.board=board;this.from=from;this.card=card;}
+        @Override public boolean onTouch(View view,android.view.MotionEvent event){
+            switch(event.getActionMasked()){
+                case android.view.MotionEvent.ACTION_DOWN:
+                    source=view;held=false;moved=false;cancelled=false;downX=x=event.getRawX();downY=y=event.getRawY();
+                    view.postDelayed(pickup,ViewConfiguration.getLongPressTimeout());return true;
+                case android.view.MotionEvent.ACTION_MOVE:
+                    if(cancelled)return true;
+                    x=event.getRawX();y=event.getRawY();
+                    if(!moved && Math.hypot(x-downX,y-downY)>slop){moved=true;if(!held)view.removeCallbacks(pickup);else createGhost();}
+                    if(held&&moved){positionGhost();updateTarget();if(!scrollScheduled){scrollScheduled=true;boardScroll.postOnAnimation(scrollTick);}}
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                    if(cancelled)return true;
+                    x=event.getRawX();y=event.getRawY();view.removeCallbacks(pickup);
+                    if(held&&moved){updateTarget();JSONObject destination=highlight==null?null:dropColumns.get(highlight);int scrollY=boardScroll.getScrollY();cleanup();if(destination!=null&&destination!=from){if(transferCard(from,destination,card)){view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);show();boardScroll.post(()->boardScroll.scrollTo(0,scrollY));}}else if(destination==null)Toast.makeText(MainActivity.this,"Drop on a column to move",Toast.LENGTH_SHORT).show();}
+                    else if(held){boolean quickRelease=event.getEventTime()-pickedUpAt>=0 && event.getEventTime()-pickedUpAt<=MENU_RELEASE_WINDOW_MS;cleanup();if(quickRelease)cardMenu(board,from,card);}
+                    else {cleanup();if(!moved)view.performClick();}
+                    return true;
+                case android.view.MotionEvent.ACTION_POINTER_DOWN:
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    cancelled=true;view.removeCallbacks(pickup);cleanup();return true;
+                default:return true;
+            }
+        }
+        private void createGhost(){
+            ghost=text(card.optString("title"),16,INK,true);pad(ghost,14);ghost.setBackground(shape(SURFACE,ACCENT));ghost.setElevation(dp(12));
+            int width=Math.min(source.getWidth(),root.getWidth()-dp(32));
+            ghost.measure(View.MeasureSpec.makeMeasureSpec(Math.max(1,width),View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(dp(100),View.MeasureSpec.AT_MOST));
+            ghost.layout(0,0,ghost.getMeasuredWidth(),ghost.getMeasuredHeight());root.getOverlay().add(ghost);positionGhost();
+        }
+        private void positionGhost(){if(ghost==null)return;int[] loc=new int[2];root.getLocationOnScreen(loc);ghost.setTranslationX(x-loc[0]-ghost.getWidth()/2f);ghost.setTranslationY(y-loc[1]-ghost.getHeight()/2f);}
+        private void updateTarget(){
+            View target=null;Rect r=new Rect();for(View column:dropColumns.keySet())if(column.getGlobalVisibleRect(r)&&r.contains((int)x,(int)y)){target=column;break;}
+            if(target==highlight)return;if(highlight!=null)highlight.setBackground(shape(SURFACE,BORDER));highlight=target;
+            if(highlight!=null){highlight.setBackground(shape(SURFACE,ACCENT));source.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
+        }
+        private void cleanup(){
+            if(source!=null){source.removeCallbacks(pickup);source.setAlpha(1f);if(source.getParent()!=null)source.getParent().requestDisallowInterceptTouchEvent(false);}
+            if(boardScroll!=null)boardScroll.removeCallbacks(scrollTick);scrollScheduled=false;
+            if(highlight!=null)highlight.setBackground(shape(SURFACE,BORDER));highlight=null;
+            if(ghost!=null){root.getOverlay().remove(ghost);ghost=null;}held=false;
+        }
+    }
     private String summary(JSONObject c){JSONArray tasks=array(c,"tasks");int done=0;for(int i=0;i<tasks.length();i++)if(at(tasks,i).optBoolean("done"))done++;String due=c.optString("due");return (tasks.length()>0?"\n✓ "+done+"/"+tasks.length():"")+(due.isEmpty()?"":"   ◷ "+due);}
     private void columnMenu(JSONObject b,JSONObject c){new AlertDialog.Builder(this).setTitle(c.optString("name")).setItems(new String[]{"Rename","Change color","Delete column"},(d,w)->{if(w==0)input("Rename column","Name",c.optString("name"),s->{put(c,"name",s);save();show();});else if(w==1)new AlertDialog.Builder(this).setTitle("Column color").setItems(new String[]{"Indigo","Teal","Amber","Rose","Blue","Purple"},(x,n)->{put(c,"color",palette[n]);save();show();}).show();else if(array(b,"columns").length()==1)Toast.makeText(this,"Keep at least one column",Toast.LENGTH_SHORT).show();else new AlertDialog.Builder(this).setTitle("Delete column?").setMessage("Its work items will also be deleted.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(x,n)->{remove(array(b,"columns"),c.optString("id"));save();show();}).show();}).show();}
     private void all(){EditText search=new EditText(this);search.setSingleLine();search.setHint("Search work items");content.addView(search);LinearLayout results=vertical();content.addView(results);Runnable render=()->{results.removeAllViews();String q=search.getText().toString().trim().toLowerCase(Locale.ROOT);int count=0;JSONArray bs=array(data,"boards");for(int i=0;i<bs.length();i++){JSONObject b=at(bs,i);JSONArray cs=array(b,"columns");for(int j=0;j<cs.length();j++){JSONObject c=at(cs,j);JSONArray cards=array(c,"cards");for(int k=0;k<cards.length();k++){JSONObject card=at(cards,k);if(!card.toString().toLowerCase(Locale.ROOT).contains(q))continue;count++;TextView t=text(card.optString("title")+"\n"+path(b)+"  ·  "+c.optString("name")+summary(card),16,INK,false);pad(t,16);t.setBackground(shape(SURFACE,BORDER));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(8);results.addView(t,p);t.setOnClickListener(v->editCard(b,c,card));}}}if(count==0){TextView t=text("No matching work items",15,MUTED,false);pad(t,16);results.addView(t);}};search.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int count,int after){}public void onTextChanged(CharSequence s,int st,int before,int count){render.run();}public void afterTextChanged(android.text.Editable e){}});render.run();}
+    private void backupView(){
+        String tree=getPreferences(MODE_PRIVATE).getString("backupTree","");
+        String last=getPreferences(MODE_PRIVATE).getString("backupStatus","");
+        section("Automatic backups");
+        empty(tree.isEmpty()?"No backup folder selected. Your boards are currently only in app storage.":"Backup folder connected. "+(last.isEmpty()?"Waiting for a backup.":last));
+        empty("Each save writes a separate snapshot to the folder you choose. Snapshots contain your boards, work items, defaults, column visibility, and theme.");
+        button(tree.isEmpty()?"Choose backup folder":"Change backup folder",()->new AlertDialog.Builder(this).setTitle("Choose a backup folder").setMessage("The app will immediately back up its current data and continue after each save. After reinstalling, restore an existing snapshot before connecting a folder if you want the old boards back.").setNegativeButton("Cancel",null).setPositiveButton("Choose folder",(d,w)->{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(intent,PICK_BACKUP_FOLDER);}).show());
+        if(!tree.isEmpty())button("Back up now",()->{queueBackup();show();});
+        section("Restore after reinstall");empty("Choose a previously saved code-kanban JSON snapshot. Restoring replaces the current app data. Afterwards, reconnect a backup folder for future saves.");
+        button("Choose backup to restore",()->{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivityForResult(intent,PICK_RESTORE_FILE);});
+    }
+    private void queueBackup(){
+        String tree=getPreferences(MODE_PRIVATE).getString("backupTree","");if(tree.isEmpty()||data==null)return;
+        long sequence=BACKUP_SEQUENCE.incrementAndGet();getPreferences(MODE_PRIVATE).edit().putString("backupStatus","Backup in progress…").apply();
+        final String snapshot;try{snapshot=BackupStore.snapshot(data,getPreferences(MODE_PRIVATE).getBoolean("dark",true));}catch(JSONException e){backupResult(tree,sequence,"Backup failed: "+e.getMessage(),false);return;}
+        BACKUPS.execute(()->{try{BackupStore.write(getContentResolver(),Uri.parse(tree),snapshot);backupResult(tree,sequence,"Last backup: "+java.text.DateFormat.getDateTimeInstance().format(new Date()),true);}catch(Exception e){backupResult(tree,sequence,"Backup failed: "+e.getMessage(),false);}});
+    }
+    private void backupResult(String tree,long sequence,String status,boolean success){
+        runOnUiThread(()->{if(sequence!=BACKUP_SEQUENCE.get()||!tree.equals(getPreferences(MODE_PRIVATE).getString("backupTree","")))return;getPreferences(MODE_PRIVATE).edit().putString("backupStatus",status).apply();if(!isFinishing()&&!isDestroyed()){if(!success)Toast.makeText(this,status,Toast.LENGTH_LONG).show();if(tab.equals("backup"))show();}});
+    }
+    @Override protected void onActivityResult(int request,int result,Intent resultData){
+        super.onActivityResult(request,result,resultData);if(result!=RESULT_OK||resultData==null||resultData.getData()==null)return;Uri uri=resultData.getData();
+        if(request==PICK_BACKUP_FOLDER){try{int flags=resultData.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);if((flags&Intent.FLAG_GRANT_WRITE_URI_PERMISSION)==0)throw new SecurityException("The folder did not grant write access.");getContentResolver().takePersistableUriPermission(uri,flags);getPreferences(MODE_PRIVATE).edit().putString("backupTree",uri.toString()).putString("backupStatus","Backup in progress…").apply();show();queueBackup();}catch(Exception e){error("Could not connect folder",e.getMessage());}}
+        else if(request==PICK_RESTORE_FILE){BACKUPS.execute(()->{try{JSONObject backup=BackupStore.validate(BackupStore.read(getContentResolver(),uri));runOnUiThread(()->{if(isFinishing()||isDestroyed())return;new AlertDialog.Builder(this).setTitle("Restore this backup?").setMessage("This replaces all current boards, work items, defaults, and theme with the selected snapshot. Make a backup of the current data first if you need it.").setNegativeButton("Cancel",null).setPositiveButton("Restore",(d,w)->restoreBackup(backup)).show();});}catch(Exception e){runOnUiThread(()->{if(!isFinishing()&&!isDestroyed())error("Could not restore backup",e.getMessage());});}});}
+    }
+    private void restoreBackup(JSONObject backup){try{JSONObject previous=data;boolean previousDark=getPreferences(MODE_PRIVATE).getBoolean("dark",true);data=backup.getJSONObject("data");getPreferences(MODE_PRIVATE).edit().putBoolean("dark",backup.getBoolean("darkMode")).apply();if(save()){current="";tab="boards";recreate();}else{data=previous;getPreferences(MODE_PRIVATE).edit().putBoolean("dark",previousDark).apply();}}catch(JSONException e){error("Could not restore backup",e.getMessage());}}
     private void defaults(){
-        Switch theme=new Switch(this);theme.setText("Dark mode");theme.setTextColor(INK);theme.setChecked(dark);theme.setOnCheckedChangeListener((v,on)->{getPreferences(MODE_PRIVATE).edit().putBoolean("dark",on).apply();recreate();});content.addView(theme);
+        Switch theme=new Switch(this);theme.setText("Dark mode");theme.setTextColor(INK);theme.setChecked(dark);theme.setOnCheckedChangeListener((v,on)->{getPreferences(MODE_PRIVATE).edit().putBoolean("dark",on).apply();if(save())recreate();else getPreferences(MODE_PRIVATE).edit().putBoolean("dark",dark).apply();});content.addView(theme);
         empty("New boards copy this template. Existing boards are compared when opened. Changes here do not alter existing boards.");
         try{JSONObject t=template();JSONArray lists=t.getJSONArray("lists");section("Default columns");
             for(int i=0;i<lists.length();i++){final int index=i;JSONObject col=lists.getJSONObject(i);LinearLayout row=tile();TextView name=text("●  "+col.optString("title"),17,INK,true);row.addView(name);row.addView(text("Color: "+(col.optString("color").isEmpty()?"none":col.optString("color"))+"  ·  "+col.getJSONArray("cards").length()+" starter items",13,MUTED,false));row.setOnClickListener(v->editDefaultColumn(t,index));}
@@ -118,6 +232,9 @@ public class MainActivity extends Activity {
         EditText comments=field(form,"Comments (one per line)",card.optString("commentsText"),true);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Work item").setView(sc).setNegativeButton("Cancel",(d,w)->show()).setNeutralButton("More",null).setPositiveButton("Save",null).create();dialog.setOnShowListener(x->{dialog.getButton(-1).setOnClickListener(v->{String s=title.getText().toString().trim();if(s.isEmpty()){title.setError("Required");return;}put(card,"tasks",tasks);put(card,"title",s);put(card,"description",desc.getText().toString());put(card,"labels",labels.getText().toString());put(card,"due",due.getText().toString());put(card,"points",points.getText().toString());put(card,"priority",priority.getText().toString());put(card,"difficulty",difficulty.getText().toString());put(card,"ado",ado.getText().toString());put(card,"sm",sm.getText().toString());put(card,"commentsText",comments.getText().toString());save();dialog.dismiss();show();});dialog.getButton(-3).setOnClickListener(v->{dialog.dismiss();new AlertDialog.Builder(this).setItems(new String[]{"Move to column","Delete work item"},(d,w)->{if(w==0)moveCard(b,c,card);else new AlertDialog.Builder(this).setTitle("Delete work item?").setNegativeButton("Cancel",(a,z)->show()).setPositiveButton("Delete",(a,z)->{remove(array(c,"cards"),card.optString("id"));save();show();}).show();}).setOnCancelListener(d->show()).show();});});dialog.show();}
     private void editCardRefresh(LinearLayout box,JSONArray tasks){box.removeAllViews();for(int i=0;i<tasks.length();i++){JSONObject t=at(tasks,i);LinearLayout row=new LinearLayout(this);CheckBox cb=new CheckBox(this);cb.setText(t.optString("title"));cb.setChecked(t.optBoolean("done"));cb.setOnCheckedChangeListener((v,on)->put(t,"done",on));row.addView(cb,new LinearLayout.LayoutParams(0,-2,1));row.addView(action("×",()->{remove(tasks,t.optString("id"));editCardRefresh(box,tasks);}));box.addView(row);}}
-    private void moveCard(JSONObject b,JSONObject from,JSONObject card){JSONArray cols=array(b,"columns");String[] names=new String[cols.length()];for(int i=0;i<names.length;i++)names[i]=at(cols,i).optString("name");new AlertDialog.Builder(this).setTitle("Move to column").setItems(names,(d,n)->{JSONObject to=at(cols,n);if(to!=from){remove(array(from,"cards"),card.optString("id"));array(to,"cards").put(card);save();}show();}).setOnCancelListener(d->show()).show();}
+    private boolean transferCard(JSONObject from,JSONObject to,JSONObject card){
+        return CardMoves.transfer(from,to,card,this::save);
+    }
+    private void moveCard(JSONObject b,JSONObject from,JSONObject card){JSONArray cols=array(b,"columns");String[] names=new String[cols.length()];for(int i=0;i<names.length;i++)names[i]=at(cols,i).optString("name");new AlertDialog.Builder(this).setTitle("Move to column").setItems(names,(d,n)->{JSONObject to=at(cols,n);if(to!=from)transferCard(from,to,card);show();}).setOnCancelListener(d->show()).show();}
     @Override public void onBackPressed(){if(!tab.equals("boards")){tab="boards";show();}else if(board()!=null){String parent=board().optString("parent");if(parent.isEmpty()){current="";show();}else openBoard(parent);}else super.onBackPressed();}
 }

@@ -78,7 +78,9 @@ final class BoardTemplate {
         validate(template); JSONArray old=board.getJSONArray("columns"), lists=template.getJSONArray("lists"), result=new JSONArray(); boolean[] used=new boolean[old.length()];
         for(int i=0;i<lists.length();i++) { JSONObject target=lists.getJSONObject(i); JSONObject match=null;
             for(int j=0;j<old.length();j++) if(!used[j] && old.getJSONObject(j).optString("name").equals(target.optString("title"))) { match=old.getJSONObject(j);used[j]=true;break; }
-            result.put(new JSONObject().put("id",match==null?id():match.getString("id")).put("name",target.getString("title")).put("color",target.optString("color","")).put("cards",new JSONArray()));
+            JSONObject column=new JSONObject().put("id",match==null?id():match.getString("id")).put("name",target.getString("title")).put("color",target.optString("color","")).put("cards",new JSONArray());
+            if(match!=null&&match.has("collapsed"))column.put("collapsed",match.optBoolean("collapsed"));
+            result.put(column);
         }
         for(int i=0;i<old.length();i++) { JSONObject source=old.getJSONObject(i), target=null;
             for(int j=0;j<result.length();j++) if(result.getJSONObject(j).getString("name").equals(source.optString("name"))) {target=result.getJSONObject(j);break;}
