@@ -28,6 +28,8 @@ public class MainActivity extends Activity {
     private int INK, MUTED, ACCENT, BG, SURFACE, BORDER; private boolean dark;
     private JSONObject data; private String current="", tab="boards"; private LinearLayout root, content; private ScrollView boardScroll;
     private static final int PICK_BACKUP_FOLDER=1001,PICK_RESTORE_FILE=1002;
+    private static final int PICK_ALARM_SOUND=1003;
+    private JSONObject soundChoice;private TextView soundChoiceLabel;
     private static final ExecutorService BACKUPS=Executors.newSingleThreadExecutor();
     private static final java.util.concurrent.atomic.AtomicLong BACKUP_SEQUENCE=new java.util.concurrent.atomic.AtomicLong();
     private final Map<View,JSONObject> dropColumns=new LinkedHashMap<>();
@@ -60,15 +62,24 @@ public class MainActivity extends Activity {
         int systemUi=dark?0:View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         if(!dark&&android.os.Build.VERSION.SDK_INT>=35)systemUi|=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         getWindow().getDecorView().setSystemUiVisibility(systemUi);
-        load();show();
+        load();migrateLegacyReminders();show();openReminder(getIntent());
     }
+    @Override protected void onResume(){super.onResume();syncReminders();}
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){super.onRequestPermissionsResult(requestCode,permissions,grantResults);if(requestCode==2001)syncReminders();}
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);openReminder(intent);}
+    private void openReminder(Intent intent){if(intent==null||!"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction())||data==null)return;String boardId=intent.getStringExtra("boardId"),id=intent.getStringExtra("cardId");if(boardId!=null&&id!=null){JSONObject b=find(array(data,"boards"),boardId);if(b!=null)revealCard(b,id);}intent.setAction(null);}
+    private void syncReminders(){try{ReminderScheduler.sync(this,data);}catch(Exception e){android.util.Log.e("CodeKanbanReminder","Could not schedule reminders",e);}}
     private void load(){
         android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));
         try(FileInputStream in=file.openRead()){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);data=new JSONObject(out.toString("UTF-8"));}
         catch(FileNotFoundException e){data=obj();array(data,"boards");put(data,"defaults",new JSONArray(Arrays.asList("Backlog","To Do","Doing","Done")));}
         catch(Exception e){new AlertDialog.Builder(this).setTitle("Unable to open boards").setMessage("Your saved data could not be read. It has not been replaced. Close the app and recover it before continuing.\n\n"+e.getMessage()).setPositiveButton("Close",(d,w)->finish()).setCancelable(false).show();data=null;}
     }
-    private boolean save(){android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;try{out=file.startWrite();out.write(data.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);queueBackup();return true;}catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}}
+    private void migrateLegacyReminders(){
+        if(data==null)return;boolean changed=false;
+        try{JSONArray boards=data.optJSONArray("boards");if(boards==null)return;for(int b=0;b<boards.length();b++){JSONObject board=boards.optJSONObject(b);if(board==null)continue;JSONArray cols=board.optJSONArray("columns");if(cols==null)continue;for(int c=0;c<cols.length();c++){JSONObject col=cols.optJSONObject(c);JSONArray cards=col==null?null:col.optJSONArray("cards");if(cards==null)continue;for(int i=0;i<cards.length();i++){JSONObject card=cards.optJSONObject(i),template=card==null?null:card.optJSONObject("templateData");JSONArray old=template==null?null:template.optJSONArray("reminders");if(card==null||card.has("reminders")||old==null)continue;JSONArray copied=new JSONArray(old.toString());for(int j=0;j<copied.length();j++)copied.getJSONObject(j).put("id",id());card.put("reminders",copied);changed=true;}}}if(changed)save();}catch(JSONException e){android.util.Log.e("CodeKanbanReminder","Could not migrate template reminders",e);}
+    }
+    private boolean save(){android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;try{out=file.startWrite();out.write(data.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}queueBackup();syncReminders();return true;}
     private GradientDrawable shape(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(16));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
     private Drawable columnBackground(JSONObject column,boolean highlighted){
         final int color=parseColor(column.optString("color"));
@@ -126,7 +137,15 @@ public class MainActivity extends Activity {
         LinearLayout row=new LinearLayout(this);row.addView(action("‹ Back",()->{if(b.optString("parent").isEmpty()){current="";show();}else openBoard(b.optString("parent"));}));row.addView(action("+ Nested board",()->newBoard(bid)));row.addView(action("⋮",()->boardMenu(b)));content.addView(row);
         JSONArray boards=array(data,"boards");boolean children=false;for(int i=0;i<boards.length();i++){JSONObject child=at(boards,i);if(bid.equals(child.optString("parent"))){if(!children)section("Nested boards");children=true;boardTile(child);}}
         dragBoardTargets=vertical();dragBoardTargets.setVisibility(View.GONE);content.addView(dragBoardTargets);TextView hint=text("DROP ON A BOARD TO MOVE",13,MUTED,true);pad(hint,10);dragBoardTargets.addView(hint);for(int i=0;i<boards.length();i++){JSONObject target=at(boards,i);if(target==b)continue;TextView destination=text("▦  "+path(target),16,INK,true);pad(destination,14);destination.setBackground(shape(SURFACE,BORDER));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(8);dragBoardTargets.addView(destination,p);dropBoards.put(destination,target);}
-        section("Columns");JSONArray cols=array(b,"columns");for(int i=0;i<cols.length();i++)columnView(b,at(cols,i));button("+ Add column",()->input("Add column","Column name","",name->{cols.put(newColumn(name,palette[cols.length()%palette.length]));save();show();}));
+        LinearLayout columnHeader=new LinearLayout(this);columnHeader.setGravity(Gravity.CENTER_VERTICAL);TextView heading=text("Columns",18,INK,true);columnHeader.addView(heading,new LinearLayout.LayoutParams(0,-2,1));columnHeader.addView(action("Collapse all",()->collapseAllColumns(b)));content.addView(columnHeader);
+        JSONArray cols=array(b,"columns");for(int i=0;i<cols.length();i++)columnView(b,at(cols,i));button("+ Add column",()->input("Add column","Column name","",name->{cols.put(newColumn(name,palette[cols.length()%palette.length]));save();show();}));
+    }
+    private void collapseAllColumns(JSONObject board){
+        JSONArray columns=array(board,"columns");ArrayList<JSONObject> changed=new ArrayList<>();ArrayList<Object> previous=new ArrayList<>();
+        for(int i=0;i<columns.length();i++){JSONObject column=at(columns,i);if(column!=null&&!column.optBoolean("collapsed")){changed.add(column);previous.add(column.has("collapsed")?column.opt("collapsed"):null);put(column,"collapsed",true);}}
+        if(changed.isEmpty())return;
+        if(!save()){for(int i=0;i<changed.size();i++){if(previous.get(i)==null)changed.get(i).remove("collapsed");else put(changed.get(i),"collapsed",previous.get(i));}return;}
+        int scrollY=boardScroll.getScrollY();show();boardScroll.post(()->boardScroll.scrollTo(0,scrollY));
     }
     private void boardMenu(JSONObject b){new AlertDialog.Builder(this).setTitle(b.optString("name")).setItems(new String[]{"Rename board","Apply default layout","Use columns as default","Delete board"},(d,w)->{if(w==1)checkDefault(b,true);else if(w==2)useBoardAsDefault(b);else if(w==0)input("Rename board","Board name",b.optString("name"),n->{put(b,"name",n);save();show();});else new AlertDialog.Builder(this).setTitle("Delete board?").setMessage("This deletes the board, all nested boards, and their work items.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(x,y)->{String parent=b.optString("parent");deleteTree(b.optString("id"));current=parent;save();show();}).show();}).show();}
     private void deleteTree(String id){JSONArray bs=array(data,"boards");ArrayList<String> children=new ArrayList<>();for(int i=0;i<bs.length();i++)if(id.equals(at(bs,i).optString("parent")))children.add(at(bs,i).optString("id"));for(String child:children)deleteTree(child);remove(bs,id);}
@@ -154,7 +173,7 @@ public class MainActivity extends Activity {
             LinearLayout taskBody=vertical();taskBody.setVisibility(open?View.VISIBLE:View.GONE);view.addView(taskBody);
             Runnable updateHeading=()->{int done=0;for(int i=0;i<tasks.length();i++)if(at(tasks,i).optBoolean("done"))done++;heading.setText((taskBody.getVisibility()==View.VISIBLE?"▾  ":"▸  ")+"Tasks ("+done+"/"+tasks.length()+")");heading.setContentDescription((taskBody.getVisibility()==View.VISIBLE?"Collapse":"Expand")+" tasks for "+card.optString("title"));};
             updateHeading.run();heading.setOnClickListener(v->{boolean expand=taskBody.getVisibility()!=View.VISIBLE;taskBody.setVisibility(expand?View.VISIBLE:View.GONE);if(expand)expandedTasks.add(key);else expandedTasks.remove(key);updateHeading.run();});
-            for(int pass=0;pass<2;pass++)for(int i=0;i<tasks.length();i++){JSONObject task=at(tasks,i);boolean done=task.optBoolean("done");if(done!=(pass==1))continue;CheckBox check=new CheckBox(this);check.setText(task.optString("title"));check.setTextColor(done?MUTED:INK);check.setTextSize(14);check.setChecked(done);if(done)check.setPaintFlags(check.getPaintFlags()|android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);taskBody.addView(check);check.setOnCheckedChangeListener((button,checked)->{boolean before=task.optBoolean("done");put(task,"done",checked);if(!save()){put(task,"done",before);button.setOnCheckedChangeListener(null);button.setChecked(before);show();}else{button.setTextColor(checked?MUTED:INK);button.setPaintFlags(checked?button.getPaintFlags()|android.graphics.Paint.STRIKE_THRU_TEXT_FLAG:button.getPaintFlags()&~android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);updateHeading.run();}});}
+            for(int pass=0;pass<2;pass++)for(int i=0;i<tasks.length();i++){JSONObject task=at(tasks,i);boolean done=task.optBoolean("done");if(done!=(pass==1))continue;CheckBox check=new CheckBox(this);check.setText(task.optString("title"));check.setTextColor(done?MUTED:INK);check.setTextSize(14);check.setChecked(done);if(done)check.setPaintFlags(check.getPaintFlags()|android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);taskBody.addView(check);check.setOnLongClickListener(v->{v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);taskMenu(task,()->mutateBoard(board,draft->WorkItemRelations.taskToCard(draft,card.optString("id"),task.optString("id"))),()->new AlertDialog.Builder(this).setTitle("Delete task?").setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->mutateBoard(board,draft->{WorkItemRelations.Entry owner=WorkItemRelations.find(draft,card.optString("id"));if(owner==null)throw new JSONException("Work item not found.");remove(array(owner.card,"tasks"),task.optString("id"));})).show());return true;});check.setOnCheckedChangeListener((button,checked)->{boolean before=task.optBoolean("done");put(task,"done",checked);if(!save()){put(task,"done",before);button.setOnCheckedChangeListener(null);button.setChecked(before);show();}else{button.setTextColor(checked?MUTED:INK);button.setPaintFlags(checked?button.getPaintFlags()|android.graphics.Paint.STRIKE_THRU_TEXT_FLAG:button.getPaintFlags()&~android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);updateHeading.run();}});}
         }
         try{
             String parentId=card.optString("parentId","");if(!parentId.isEmpty()){WorkItemRelations.Entry parent=WorkItemRelations.find(board,parentId);if(parent!=null){TextView parentLink=text("↳ Parent: "+parent.card.optString("title"),14,ACCENT,true);parentLink.setPadding(0,dp(9),0,dp(4));parentLink.setOnClickListener(v->revealCard(board,parent.card.optString("id")));view.addView(parentLink);}else{TextView missing=text("Parent unavailable",13,MUTED,false);missing.setPadding(0,dp(8),0,0);view.addView(missing);}}
@@ -182,6 +201,9 @@ public class MainActivity extends Activity {
         }catch(JSONException e){error("Could not find work item",e.getMessage());}
     }
     private int parseColor(String s){try{return Color.parseColor(s);}catch(Exception e){return ACCENT;}}
+    private void taskMenu(JSONObject task,Runnable convert,Runnable delete){
+        new AlertDialog.Builder(this).setTitle(task.optString("title")).setItems(new String[]{"Convert to work item","Delete task"},(d,n)->{if(n==0)convert.run();else delete.run();}).show();
+    }
     private void cardMenu(JSONObject b,JSONObject c,JSONObject card){
         new AlertDialog.Builder(this).setTitle(card.optString("title")).setItems(new String[]{"Edit", "Move to column", "Move to board", "Set or clear parent", "Convert task to work item", "Convert work item to task", "Delete"},(dialog,choice)->{
             if(choice==0)editCard(b,c,card);
@@ -295,7 +317,9 @@ public class MainActivity extends Activity {
         runOnUiThread(()->{if(sequence!=BACKUP_SEQUENCE.get()||!tree.equals(getPreferences(MODE_PRIVATE).getString("backupTree","")))return;getPreferences(MODE_PRIVATE).edit().putString("backupStatus",status).apply();if(!isFinishing()&&!isDestroyed()){if(!success)Toast.makeText(this,status,Toast.LENGTH_LONG).show();if(tab.equals("backup"))show();}});
     }
     @Override protected void onActivityResult(int request,int result,Intent resultData){
-        super.onActivityResult(request,result,resultData);if(result!=RESULT_OK||resultData==null||resultData.getData()==null)return;Uri uri=resultData.getData();
+        super.onActivityResult(request,result,resultData);
+        if(request==PICK_ALARM_SOUND){if(result==RESULT_OK&&resultData!=null&&soundChoice!=null){Uri picked=resultData.getParcelableExtra(android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI);if(picked!=null){put(soundChoice,"soundUri",picked.toString());if(soundChoiceLabel!=null)soundChoiceLabel.setText(soundTitle(picked));}}soundChoice=null;soundChoiceLabel=null;return;}
+        if(result!=RESULT_OK||resultData==null||resultData.getData()==null)return;Uri uri=resultData.getData();
         if(request==PICK_BACKUP_FOLDER){try{int flags=resultData.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);if((flags&Intent.FLAG_GRANT_WRITE_URI_PERMISSION)==0)throw new SecurityException("The folder did not grant write access.");getContentResolver().takePersistableUriPermission(uri,flags);getPreferences(MODE_PRIVATE).edit().putString("backupTree",uri.toString()).putString("backupStatus","Backup in progress…").apply();show();queueBackup();}catch(Exception e){error("Could not connect folder",e.getMessage());}}
         else if(request==PICK_RESTORE_FILE){BACKUPS.execute(()->{try{JSONObject backup=BackupStore.validate(BackupStore.read(getContentResolver(),uri));runOnUiThread(()->{if(isFinishing()||isDestroyed())return;new AlertDialog.Builder(this).setTitle("Restore this backup?").setMessage("This replaces all current boards, work items, defaults, and theme with the selected snapshot. Make a backup of the current data first if you need it.").setNegativeButton("Cancel",null).setPositiveButton("Restore",(d,w)->restoreBackup(backup)).show();});}catch(Exception e){runOnUiThread(()->{if(!isFinishing()&&!isDestroyed())error("Could not restore backup",e.getMessage());});}});}
     }
@@ -329,6 +353,47 @@ public class MainActivity extends Activity {
         TextView heading=text(title,14,INK,true);heading.setPadding(0,dp(16),0,dp(4));body.addView(heading);
         TextView note=text(description,13,MUTED,false);body.addView(note);
     }
+    interface DateTimeResult{void selected(long millis);}
+    private void pickDateTime(long initial,DateTimeResult callback){
+        Calendar selected=Calendar.getInstance();selected.setTimeInMillis(initial);
+        new DatePickerDialog(this,(picker,year,month,day)->{
+            selected.set(Calendar.YEAR,year);selected.set(Calendar.MONTH,month);selected.set(Calendar.DAY_OF_MONTH,day);
+            new TimePickerDialog(this,(clock,hour,minute)->{selected.set(Calendar.HOUR_OF_DAY,hour);selected.set(Calendar.MINUTE,minute);selected.set(Calendar.SECOND,0);selected.set(Calendar.MILLISECOND,0);callback.selected(selected.getTimeInMillis());},selected.get(Calendar.HOUR_OF_DAY),selected.get(Calendar.MINUTE),android.text.format.DateFormat.is24HourFormat(this)).show();
+        },selected.get(Calendar.YEAR),selected.get(Calendar.MONTH),selected.get(Calendar.DAY_OF_MONTH)).show();
+    }
+    private String localDateTime(long time){return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.getDefault()).format(new Date(time));}
+    private void notificationAccess(){
+        if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},2001);return;}
+        try{Intent intent=new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,getPackageName());startActivity(intent);}catch(Exception e){error("Notification settings unavailable",e.getMessage());}
+    }
+    private void exactAlarmAccess(){
+        if(android.os.Build.VERSION.SDK_INT<31)return;
+        try{startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:"+getPackageName())));}catch(Exception e){error("Alarm settings unavailable",e.getMessage());}
+    }
+    private void fullScreenAccess(){if(android.os.Build.VERSION.SDK_INT<34)return;try{startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,Uri.parse("package:"+getPackageName())));}catch(Exception e){error("Full-screen alarm settings unavailable",e.getMessage());}}
+    private boolean fullScreenReady(){
+        NotificationManager notifications=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+        NotificationChannel alarmChannel=notifications==null?null:notifications.getNotificationChannel(AlarmService.CHANNEL);
+        if(!ReminderScheduler.notificationsAllowed(this)||(notifications!=null&&!notifications.areNotificationsEnabled())||(alarmChannel!=null&&alarmChannel.getImportance()==NotificationManager.IMPORTANCE_NONE)){new AlertDialog.Builder(this).setTitle("Allow alarm notifications").setMessage("Notifications must be enabled for full-screen alarms. Enable them, then return and tap Done again.").setNegativeButton("Cancel",null).setPositiveButton("Settings",(d,w)->notificationAccess()).show();return false;}
+        AlarmManager alarms=(AlarmManager)getSystemService(ALARM_SERVICE);
+        if(android.os.Build.VERSION.SDK_INT>=31&&alarms!=null&&!alarms.canScheduleExactAlarms()){new AlertDialog.Builder(this).setTitle("Allow exact alarms").setMessage("Exact alarm access is required for full-screen alarms. Enable it, then return and tap Done again.").setNegativeButton("Cancel",null).setPositiveButton("Settings",(d,w)->exactAlarmAccess()).show();return false;}
+        if(android.os.Build.VERSION.SDK_INT>=34&&notifications!=null&&!notifications.canUseFullScreenIntent()){new AlertDialog.Builder(this).setTitle("Allow full-screen alarms").setMessage("Allow Code Kanban to show full-screen alarms, then return and tap Done again.").setNegativeButton("Cancel",null).setPositiveButton("Settings",(d,w)->fullScreenAccess()).show();return false;}
+        return true;
+    }
+    private String soundTitle(Uri uri){try{android.media.Ringtone ringtone=android.media.RingtoneManager.getRingtone(this,uri);return ringtone==null?"Default alarm sound":ringtone.getTitle(this);}catch(Exception e){return "Selected alarm sound";}}
+    private void configureReminder(JSONObject source,java.util.function.Consumer<JSONObject> done){
+        final JSONObject reminder;try{reminder=new JSONObject(source.toString());}catch(JSONException e){error("Could not edit reminder",e.getMessage());return;}
+        LinearLayout form=vertical();pad(form,20);TextView when=text(localDateTime(ReminderScheduler.time(reminder)),16,INK,true);form.addView(when);
+        form.addView(action("Change date and time",()->pickDateTime(ReminderScheduler.time(reminder),at->{if(at<=System.currentTimeMillis()){Toast.makeText(this,"Choose a future time",Toast.LENGTH_SHORT).show();return;}if(at!=ReminderScheduler.time(reminder))reminder.remove("notifiedAt");put(reminder,"at",at);when.setText(localDateTime(at));})));
+        CheckBox full=new CheckBox(this);full.setText("Full-screen alarm");full.setChecked(reminder.optBoolean("fullScreen"));form.addView(full);form.addView(text("A full-screen alarm rings until dismissed or snoozed. Its sound uses the phone's alarm volume.",13,MUTED,false));
+        Uri existing=reminder.optString("soundUri").isEmpty()?android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI:Uri.parse(reminder.optString("soundUri"));TextView sound=text(soundTitle(existing),14,INK,false);sound.setPadding(0,dp(12),0,0);form.addView(sound);
+        form.addView(action("Choose alarm sound",()->{soundChoice=reminder;soundChoiceLabel=sound;Intent picker=new Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER);picker.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,android.media.RingtoneManager.TYPE_ALARM);picker.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,reminder.optString("soundUri").isEmpty()?android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI:Uri.parse(reminder.optString("soundUri")));picker.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT,true);picker.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT,false);startActivityForResult(picker,PICK_ALARM_SOUND);}));
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Reminder settings").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Done",null).create();dialog.setOnShowListener(d->dialog.getButton(-1).setOnClickListener(v->{if(full.isChecked()&&!fullScreenReady())return;put(reminder,"fullScreen",full.isChecked());dialog.dismiss();done.accept(reminder);}));dialog.show();
+    }
+    private void renderReminders(LinearLayout list,JSONArray reminders,String cardId){
+        list.removeAllViews();if(reminders.length()==0){TextView empty=text("No reminders",14,MUTED,false);pad(empty,8);list.addView(empty);return;}
+        for(int i=0;i<reminders.length();i++){final int index=i;JSONObject reminder=at(reminders,i);if(reminder==null)continue;LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);long at=ReminderScheduler.time(reminder);String label=(at>0?java.text.DateFormat.getDateTimeInstance().format(new Date(at)):"Invalid reminder time")+(reminder.optBoolean("fullScreen")?" · Alarm":" · Notification");String occurrence=ReminderScheduler.key(cardId,reminder.optString("id"),at);android.content.SharedPreferences state=getSharedPreferences(ReminderScheduler.PREFS,MODE_PRIVATE);long snoozed=state.getLong("snooze/"+occurrence,0);if(state.getBoolean("active/"+occurrence,false))label+=" · Ringing";else if(snoozed>0)label+=" · Snoozed until "+java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new Date(snoozed));else if(state.getBoolean("delivered/"+occurrence,false))label+=reminder.optBoolean("fullScreen")?" · Dismissed":" · Notified";TextView when=text(label,14,INK,false);row.addView(when,new LinearLayout.LayoutParams(0,-2,1));row.addView(action("Edit",()->configureReminder(reminder,updated->{try{reminders.put(index,updated);renderReminders(list,reminders,cardId);}catch(JSONException e){error("Could not edit reminder",e.getMessage());}})));row.addView(action("Remove",()->{remove(reminders,reminder.optString("id"));renderReminders(list,reminders,cardId);}));list.addView(row);}
+    }
     private void restoreObject(JSONObject target,JSONObject snapshot){
         ArrayList<String> keys=new ArrayList<>();Iterator<String> existing=target.keys();while(existing.hasNext())keys.add(existing.next());
         for(String key:keys)target.remove(key);Iterator<String> saved=snapshot.keys();while(saved.hasNext()){String key=saved.next();put(target,key,snapshot.opt(key));}
@@ -342,8 +407,18 @@ public class MainActivity extends Activity {
 
         LinearLayout time=editorSection(form,"Time",false);
         editorNote(time,"Recurring", "Not available yet on Android.");
-        editorNote(time,"Reminders", "Not available yet on Android.");
-        EditText due=field(time,"Due date (e.g. 2026-12-31)",card.optString("due"),false);
+        TextView reminderTitle=text("Reminders",14,INK,true);reminderTitle.setPadding(0,dp(16),0,dp(6));time.addView(reminderTitle);
+        JSONArray reminders;try{JSONArray existing=card.optJSONArray("reminders");reminders=existing==null?new JSONArray():new JSONArray(existing.toString());}catch(JSONException e){error("Could not open reminders",e.getMessage());return;}
+        LinearLayout reminderList=vertical();time.addView(reminderList);renderReminders(reminderList,reminders,card.optString("id"));
+        time.addView(action("+ Add reminder",()->pickDateTime(System.currentTimeMillis()+3600000,at->{if(at<=System.currentTimeMillis()){Toast.makeText(this,"Choose a future time",Toast.LENGTH_SHORT).show();return;}JSONObject reminder=put(put(put(obj(),"id",id()),"kind","scheduled"),"at",at);configureReminder(reminder,configured->{reminders.put(configured);renderReminders(reminderList,reminders,card.optString("id"));Toast.makeText(this,"Save the work item to schedule this reminder",Toast.LENGTH_LONG).show();if(!ReminderScheduler.notificationsAllowed(this))notificationAccess();});})));
+        NotificationManager notifications=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+        NotificationChannel reminderChannel=notifications==null?null:notifications.getNotificationChannel(ReminderScheduler.CHANNEL);
+        if(!ReminderScheduler.notificationsAllowed(this)||(notifications!=null&&!notifications.areNotificationsEnabled())||(reminderChannel!=null&&reminderChannel.getImportance()==NotificationManager.IMPORTANCE_NONE))time.addView(action("Enable notifications",this::notificationAccess));
+        AlarmManager alarms=(AlarmManager)getSystemService(ALARM_SERVICE);if(android.os.Build.VERSION.SDK_INT>=31&&alarms!=null&&!alarms.canScheduleExactAlarms())time.addView(action("Allow exact reminder timing",this::exactAlarmAccess));
+        TextView reminderInfo=text("Notifications require permission. Without exact alarm access, reminders may arrive late.",13,MUTED,false);time.addView(reminderInfo);
+        EditText due=field(time,"Due date and time",card.optString("due"),false);
+        time.addView(action("Choose due date and time",()->pickDateTime(System.currentTimeMillis(),at->due.setText(localDateTime(at)))));
+        time.addView(action("Clear due date",()->due.setText("")));
         LinearLayout history=editorSection(time,"Work item history",false);
         editorNote(history,"History", "Work item movement history is not available yet.");
 
@@ -367,24 +442,34 @@ public class MainActivity extends Activity {
         editorNote(relational,"File bookmarks","Not available yet on Android.");
         TextView taskHead=text("Task list",14,INK,true);taskHead.setPadding(0,dp(18),0,dp(8));relational.addView(taskHead);
         JSONArray tasks;try{tasks=new JSONArray(array(card,"tasks").toString());}catch(JSONException ex){throw new IllegalStateException(ex);}
-        LinearLayout taskBox=vertical();relational.addView(taskBox);editCardRefresh(taskBox,tasks);
-        relational.addView(action("+ Add task",()->input("Add task","Task","",value->{tasks.put(put(put(put(obj(),"id",id()),"title",value),"done",false));editCardRefresh(taskBox,tasks);})));
+        LinearLayout taskBox=vertical();relational.addView(taskBox);
+        java.util.concurrent.atomic.AtomicReference<java.util.function.Consumer<String>> convertTask=new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.function.Consumer<String> convertFromDraft=taskId->{if(convertTask.get()!=null)convertTask.get().accept(taskId);};
+        editCardRefresh(taskBox,tasks,convertFromDraft);
+        relational.addView(action("+ Add task",()->input("Add task","Task","",value->{tasks.put(put(put(put(obj(),"id",id()),"title",value),"done",false));editCardRefresh(taskBox,tasks,convertFromDraft);})));
+
 
         LinearLayout commentSection=editorSection(form,"Comments",true);
         EditText comments=field(commentSection,"Comments (one per line)",card.optString("commentsText"),true);
 
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Work item").setView(sc).setNegativeButton("Cancel",(d,w)->show()).setNeutralButton("More",null).setPositiveButton("Save",null).create();sc.setTag(dialog);
+        java.util.function.BooleanSupplier saveDraft=()->{String value=title.getText().toString().trim();if(value.isEmpty()){title.setError("Required");title.requestFocus();return false;}
+            JSONObject previous;try{previous=new JSONObject(card.toString());}catch(JSONException e){error("Could not save work item",e.getMessage());return false;}
+            put(card,"tasks",tasks);put(card,"reminders",reminders);put(card,"title",value);put(card,"description",desc.getText().toString());put(card,"labels",labels.getText().toString());put(card,"due",due.getText().toString());put(card,"points",points.getText().toString());put(card,"priority",priority.getText().toString());put(card,"difficulty",difficulty.getText().toString());put(card,"ado",ado.getText().toString());put(card,"sm",sm.getText().toString());put(card,"commentsText",comments.getText().toString());
+            if(save())return true;restoreObject(card,previous);return false;
+        };
+        convertTask.set(taskId->{if(saveDraft.getAsBoolean()){dialog.dismiss();mutateBoard(b,draft->WorkItemRelations.taskToCard(draft,card.optString("id"),taskId));}});
         dialog.setOnShowListener(x->{
-            dialog.getButton(-1).setOnClickListener(v->{String value=title.getText().toString().trim();if(value.isEmpty()){title.setError("Required");title.requestFocus();return;}
-                JSONObject previous;try{previous=new JSONObject(card.toString());}catch(JSONException e){error("Could not save work item",e.getMessage());return;}
-                put(card,"tasks",tasks);put(card,"title",value);put(card,"description",desc.getText().toString());put(card,"labels",labels.getText().toString());put(card,"due",due.getText().toString());put(card,"points",points.getText().toString());put(card,"priority",priority.getText().toString());put(card,"difficulty",difficulty.getText().toString());put(card,"ado",ado.getText().toString());put(card,"sm",sm.getText().toString());put(card,"commentsText",comments.getText().toString());
-                if(save()){dialog.dismiss();show();}else restoreObject(card,previous);
-            });
+            dialog.getButton(-1).setOnClickListener(v->{if(saveDraft.getAsBoolean()){dialog.dismiss();show();}});
             dialog.getButton(-3).setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Discard unsaved edits?").setMessage("Save your changes before using work item actions, or discard them to continue.").setNegativeButton("Keep editing",null).setPositiveButton("Discard and continue",(d,w)->{dialog.dismiss();cardMenu(b,c,card);}).show());
             dialog.getWindow().setLayout(getResources().getDisplayMetrics().widthPixels-dp(24),WindowManager.LayoutParams.WRAP_CONTENT);
         });dialog.show();
     }
-    private void editCardRefresh(LinearLayout box,JSONArray tasks){box.removeAllViews();for(int i=0;i<tasks.length();i++){JSONObject t=at(tasks,i);LinearLayout row=new LinearLayout(this);CheckBox cb=new CheckBox(this);cb.setText(t.optString("title"));cb.setChecked(t.optBoolean("done"));cb.setOnCheckedChangeListener((v,on)->put(t,"done",on));row.addView(cb,new LinearLayout.LayoutParams(0,-2,1));row.addView(action("×",()->{remove(tasks,t.optString("id"));editCardRefresh(box,tasks);}));box.addView(row);}}
+    private void editCardRefresh(LinearLayout box,JSONArray tasks,java.util.function.Consumer<String> convert){
+        box.removeAllViews();for(int i=0;i<tasks.length();i++){JSONObject task=at(tasks,i);LinearLayout row=new LinearLayout(this);CheckBox cb=new CheckBox(this);cb.setText(task.optString("title"));cb.setChecked(task.optBoolean("done"));cb.setOnCheckedChangeListener((v,on)->put(task,"done",on));
+            cb.setOnLongClickListener(v->{v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);taskMenu(task,()->convert.accept(task.optString("id")),()->{remove(tasks,task.optString("id"));editCardRefresh(box,tasks,convert);});return true;});
+            row.addView(cb,new LinearLayout.LayoutParams(0,-2,1));row.addView(action("×",()->{remove(tasks,task.optString("id"));editCardRefresh(box,tasks,convert);}));box.addView(row);}
+    }
     private boolean transferCard(JSONObject from,JSONObject to,JSONObject card){
         return CardMoves.transfer(from,to,card,this::save);
     }

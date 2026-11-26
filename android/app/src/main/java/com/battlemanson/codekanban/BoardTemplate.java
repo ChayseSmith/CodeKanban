@@ -67,6 +67,7 @@ final class BoardTemplate {
         if (labels != null) for (int i=0; i<labels.length(); i++) { if (i>0) labelText.append(", "); labelText.append(labels.getJSONObject(i).optString("title")); }
         if (comments != null) for (int i=0; i<comments.length(); i++) { if (i>0) commentText.append('\n'); commentText.append(comments.getJSONObject(i).optString("comment")); }
         if (checks != null) for (int i=0; i<checks.length(); i++) { JSONObject task=checks.getJSONObject(i); tasks.put(new JSONObject().put("id",task.optString("id",id())).put("title",task.optString("title")).put("done",task.optBoolean("checked"))); }
+        JSONArray reminders=source.optJSONArray("reminders");if(reminders!=null){JSONArray copied=new JSONArray();for(int i=0;i<reminders.length();i++){JSONObject reminder=copy(reminders.getJSONObject(i));reminder.put("id",id());copied.put(reminder);}card.put("reminders",copied);}
         return card.put("labels",labelText.toString()).put("commentsText",commentText.toString()).put("tasks",tasks).put("templateData",source);
     }
     static boolean matches(JSONObject board, JSONObject template) {
