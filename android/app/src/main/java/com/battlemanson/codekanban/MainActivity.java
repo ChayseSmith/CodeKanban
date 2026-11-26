@@ -27,6 +27,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private int INK, MUTED, ACCENT, BG, SURFACE, BORDER; private boolean dark;
     private JSONObject data; private String current="", tab="boards"; private LinearLayout root, content; private ScrollView boardScroll;
+    private boolean skipNextUpdateCheck;
     private static final int PICK_BACKUP_FOLDER=1001,PICK_RESTORE_FILE=1002;
     private static final int PICK_ALARM_SOUND=1003;
     private JSONObject soundChoice;private TextView soundChoiceLabel;
@@ -62,12 +63,12 @@ public class MainActivity extends Activity {
         int systemUi=dark?0:View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         if(!dark&&android.os.Build.VERSION.SDK_INT>=35)systemUi|=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         getWindow().getDecorView().setSystemUiVisibility(systemUi);
-        boolean reminderLaunch=getIntent()!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(getIntent().getAction());
-        load();migrateLegacyReminders();show();openReminder(getIntent());if(state==null&&!reminderLaunch)new UpdateManager(this).check(false);
+        skipNextUpdateCheck=getIntent()!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(getIntent().getAction());
+        load();migrateLegacyReminders();show();openReminder(getIntent());
     }
-    @Override protected void onResume(){super.onResume();syncReminders();new UpdateManager(this).resumePending();}
+    @Override protected void onResume(){super.onResume();syncReminders();UpdateManager updates=new UpdateManager(this);boolean pending=updates.resumePending();if(skipNextUpdateCheck)skipNextUpdateCheck=false;else if(!pending&&data!=null)updates.check(false);}
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){super.onRequestPermissionsResult(requestCode,permissions,grantResults);if(requestCode==2001)syncReminders();}
-    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);openReminder(intent);}
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(intent!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction()))skipNextUpdateCheck=true;openReminder(intent);}
     private void openReminder(Intent intent){if(intent==null||!"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction())||data==null)return;String boardId=intent.getStringExtra("boardId"),id=intent.getStringExtra("cardId");if(boardId!=null&&id!=null){JSONObject b=find(array(data,"boards"),boardId);if(b!=null)revealCard(b,id);}intent.setAction(null);}
     private void syncReminders(){try{ReminderScheduler.sync(this,data);}catch(Exception e){android.util.Log.e("CodeKanbanReminder","Could not schedule reminders",e);}}
     private void load(){
