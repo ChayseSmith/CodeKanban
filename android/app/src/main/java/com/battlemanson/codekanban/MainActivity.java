@@ -27,7 +27,21 @@ public class MainActivity extends Activity {
     private JSONObject board(){return find(array(data,"boards"),current);}
     private JSONObject col(JSONObject b,String id){return find(array(b,"columns"),id);}
     private void remove(JSONArray a,String id){for(int i=0;i<a.length();i++)if(id.equals(at(a,i).optString("id"))){a.remove(i);return;}}
-    @Override public void onCreate(Bundle state){super.onCreate(state);getWindow().setStatusBarColor(Color.rgb(38,32,102));getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);load();show();}
+    @Override public void onCreate(Bundle state){
+        dark=getPreferences(MODE_PRIVATE).getBoolean("dark",true);
+        setTheme(dark?android.R.style.Theme_Material_NoActionBar:android.R.style.Theme_Material_Light_NoActionBar);
+        super.onCreate(state);
+        INK=Color.parseColor(dark?"#F1F5F9":"#1E293B");
+        MUTED=Color.parseColor(dark?"#A8B5C8":"#64748B");
+        ACCENT=Color.parseColor(dark?"#B3A8FF":"#4338CA");
+        BG=Color.parseColor(dark?"#101522":"#F5F7FC");
+        SURFACE=Color.parseColor(dark?"#1C2535":"#FFFFFF");
+        BORDER=Color.parseColor(dark?"#354154":"#E1E6F0");
+        getWindow().setStatusBarColor(dark?BG:Color.rgb(38,32,102));
+        getWindow().setNavigationBarColor(dark?BG:Color.WHITE);
+        getWindow().getDecorView().setSystemUiVisibility(dark?0:View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        load();show();
+    }
     private void load(){
         android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));
         try(FileInputStream in=file.openRead()){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);data=new JSONObject(out.toString("UTF-8"));}
