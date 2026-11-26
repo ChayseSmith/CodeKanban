@@ -5,6 +5,7 @@ The Android app keeps its working data in private app storage. Boards can contai
 ## Available in this first version
 
 - Create, rename and delete boards and nested boards.
+- Long-press a board for **Rename** and **Set Icon**. The offline icon picker includes a searchable Material Design Icons catalog, preset colors, and a custom color wheel with brightness and hex input. Icon choices and colors are included in board backups.
 - Use dark mode by default, or switch to light mode under Defaults.
 - Configure default columns, order and hexadecimal colors, or set a board's columns as the default. Add, rename, color and delete columns on a board.
 - Edit the full default template using extension-style JSON. New boards copy starter items and preserve template settings and archive data; supported work-item fields appear in the app.
@@ -75,3 +76,5 @@ These extension capabilities are not yet implemented in the Android app:
 - VS Code-specific integration such as editor selections, workspace discovery, sidebar views and window-title changes.
 
 The Android storage format is private and is not currently the extension's `.kanban` format. Feature names shared with the extension do not imply full behavioral parity.
+
+The board picker bundles [Material Design Icons](https://github.com/Templarian/MaterialDesign-Webfont) version 7.4.47. Its font, icon-name index, and license notices are in `app/src/main/assets/mdi/`.
