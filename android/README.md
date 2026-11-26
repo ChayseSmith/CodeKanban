@@ -35,7 +35,30 @@ Files selected through Android's document picker are outside app-specific storag
 
 Open `android` in Android Studio, install Android SDK 35, and run the app on a device or emulator. Alternatively, with JDK 17 and the Android SDK installed, run `./gradlew :app:assembleDebug` from this directory. The APK is created at `app/build/outputs/apk/debug/app-debug.apk`.
 
-The root Azure DevOps pipeline builds the debug APK and publishes `code-kanban-android-debug` as a pipeline artifact. Create a pipeline pointing at `azure-pipelines.yml` and run it; download the APK from the run's Artifacts section. Android may ask you to allow the browser or file manager to install apps from unknown sources. The artifact is debug-signed; a securely signed release build and stable signing key are future work.
+The GitHub Actions workflow `.github/workflows/android-release.yml` builds, signs and verifies a release APK, then publishes `code-kanban.apk` and `update.json` to a GitHub Release. It runs on pushes to the repository's default branch and can also be started manually on another branch. Successful builds also have a `code-kanban-android` workflow artifact. The older Azure pipeline file is retained for the existing Azure remote; GitHub Actions is the release workflow described here.
+
+Before enabling it, complete this one-time setup in the GitHub repository:
+
+1. Make the repository public if the app should download updates without signing in. Create a persistent Android keystore on a trusted computer **outside the repository**. For example, from PowerShell (choose a private folder you have created):
+
+   ```powershell
+   keytool -genkeypair -v -keystore "$env:USERPROFILE\Documents\CodeKanbanSigning\code-kanban.keystore" -alias codekanban -keyalg RSA -keysize 3072 -validity 10000
+   ```
+
+   Follow the interactive prompts. Keep the keystore and passwords in a secure location with a separate backup. Losing the signing key prevents in-place updates; never regenerate it for each build. If you already have the key that signed the installed APK, use that key instead.
+2. Under **Settings → Secrets and variables → Actions → Secrets**, add `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. For the sample command, the alias is `codekanban`; with the default PKCS12 keystore, use the same password for the keystore and key. To copy the keystore's Base64 to the clipboard for the secret without putting it in Git, run:
+
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\Documents\CodeKanbanSigning\code-kanban.keystore")) | Set-Clipboard
+   ```
+
+   Paste it into the `ANDROID_KEYSTORE_BASE64` secret and clear your clipboard afterward. Do not commit the keystore, Base64 value, or passwords. Authorize Actions to create releases if repository or organization policy restricts the workflow token.
+3. Under **Settings → Secrets and variables → Actions → Variables**, set `ANDROID_VERSION_BASE` to a non-negative integer at least as large as the version code of any APK signed with this key that is already installed. For a new key and fresh installation, `1000000` is a suitable starting value. The workflow adds its GitHub run number to this base. Never lower the base: Android refuses version downgrades. A rerun has the same run number and cannot overwrite an existing release tag; start a new workflow run instead.
+4. Commit and push the changes to the GitHub default branch, or start **Android release** manually in Actions. Download `code-kanban.apk` from the release. The build log displays the public signing-certificate fingerprint; successive builds should show the same fingerprint.
+
+If the installed app was signed with a different key and that key is unavailable, Android cannot update it with the new key. First use **Backup** in the installed app and verify a snapshot has completed. Then uninstall the old app, install the newly signed APK, restore the snapshot, and reconnect the backup folder. Uninstalling removes app-private data; snapshots do not include ringing, snoozed, or delivered reminder occurrence state. Re-test reminders after the transition. Later builds signed with the same key can update in place. A local `assembleDebug` build uses a different debug key and cannot update the signed release.
+
+The release APK checks the latest published GitHub release when the app starts; **Updates** performs a manual check. When a newer release exists, the app offers to download it, checks its SHA-256, package ID, version and signing certificate, and asks Android to install it with your confirmation. Android may ask you to allow Code Kanban to install unknown apps. The app does not update silently or poll continuously in the background. A public repository and both release assets are required. Keep unrelated releases out of the repository's latest-release slot, or include the Android update assets in them. Debug and Azure-built APKs do not have the GitHub update source configured.
 
 ## Feature backlog
 
@@ -48,7 +71,7 @@ These extension capabilities are not yet implemented in the Android app:
 - Date/time picker and due-date validation, formatted Markdown, independently editable comments, task editing and reordering, numeric field validation, ADO links and SM copy actions.
 - Recurring reminders, configurable snooze duration, and backup/restore of delivered, ringing and snoozed occurrence state. Android may delay notifications because of device power management, and notification presentation depends on system and channel settings.
 - Recurring work items, moving archived descendants, file bookmarks, column history, audit history/export and preference ranking.
-- Display-density options, accessibility and large-screen polish, automated UI tests, stable release signing, and Play Store distribution.
+- Display-density options, accessibility and large-screen polish, automated UI tests, and Play Store distribution.
 - VS Code-specific integration such as editor selections, workspace discovery, sidebar views and window-title changes.
 
 The Android storage format is private and is not currently the extension's `.kanban` format. Feature names shared with the extension do not imply full behavioral parity.

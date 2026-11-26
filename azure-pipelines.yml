@@ -10,10 +10,29 @@ steps:
     versionSpec: '17'
     jdkArchitectureOption: x64
     jdkSourceOption: PreInstalled
-- script: chmod +x android/gradlew && cd android && ./gradlew --no-daemon :app:assembleDebug
-  displayName: Build Android APK
+- script: chmod +x android/gradlew && cd android && ./gradlew --no-daemon :app:assembleRelease -PkanbanVersionCode=$(Build.BuildId)
+  displayName: Build unsigned Android release APK
+- task: AndroidSigning@3
+  displayName: Sign Android APK with persistent key
+  inputs:
+    apkFiles: 'android/app/build/outputs/apk/release/app-release-unsigned.apk'
+    apksign: true
+    apksignerKeystoreFile: 'code-kanban-release.keystore'
+    apksignerKeystorePassword: $(androidKeystorePassword)
+    apksignerKeystoreAlias: $(androidKeyAlias)
+    apksignerKeyPassword: $(androidKeyPassword)
+    zipalign: true
+- bash: |
+    set -euo pipefail
+    apk='android/app/build/outputs/apk/release/app-release-unsigned.apk'
+    signer="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+    test -n "$signer"
+    "$signer" verify --verbose --print-certs "$apk"
+    mkdir -p "$BUILD_ARTIFACTSTAGINGDIRECTORY/android"
+    cp "$apk" "$BUILD_ARTIFACTSTAGINGDIRECTORY/android/code-kanban.apk"
+  displayName: Verify signature and prepare APK
 - task: PublishPipelineArtifact@1
   inputs:
-    targetPath: android/app/build/outputs/apk/debug/app-debug.apk
-    artifact: code-kanban-android-debug
+    targetPath: $(Build.ArtifactStagingDirectory)/android/code-kanban.apk
+    artifact: code-kanban-android
   displayName: Publish installable APK

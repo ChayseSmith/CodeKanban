@@ -62,9 +62,10 @@ public class MainActivity extends Activity {
         int systemUi=dark?0:View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         if(!dark&&android.os.Build.VERSION.SDK_INT>=35)systemUi|=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         getWindow().getDecorView().setSystemUiVisibility(systemUi);
-        load();migrateLegacyReminders();show();openReminder(getIntent());
+        boolean reminderLaunch=getIntent()!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(getIntent().getAction());
+        load();migrateLegacyReminders();show();openReminder(getIntent());if(state==null&&!reminderLaunch)new UpdateManager(this).check(false);
     }
-    @Override protected void onResume(){super.onResume();syncReminders();}
+    @Override protected void onResume(){super.onResume();syncReminders();new UpdateManager(this).resumePending();}
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){super.onRequestPermissionsResult(requestCode,permissions,grantResults);if(requestCode==2001)syncReminders();}
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);openReminder(intent);}
     private void openReminder(Intent intent){if(intent==null||!"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction())||data==null)return;String boardId=intent.getStringExtra("boardId"),id=intent.getStringExtra("cardId");if(boardId!=null&&id!=null){JSONObject b=find(array(data,"boards"),boardId);if(b!=null)revealCard(b,id);}intent.setAction(null);}
@@ -108,7 +109,7 @@ public class MainActivity extends Activity {
         String title=tab.equals("boards")?(board()==null?"Your boards":board().optString("name")):tab.equals("all")?"Across boards":tab.equals("backup")?"Backup & restore":"Default board";
         TextView h=text(title,27,INK,true);header.addView(h);TextView sub=text(tab.equals("boards")?(board()==null?"Organize work, your way":"Board · "+path(board())):tab.equals("all")?"Work items from every board":tab.equals("backup")?"Keep your boards outside the app":"New boards start with these columns",13,MUTED,false);header.addView(sub);
         HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);LinearLayout nav=new LinearLayout(this);scroll.addView(nav);header.addView(scroll);
-        nav.addView(action("Boards",()->{tab="boards";show();}));nav.addView(action("All work",()->{tab="all";show();}));nav.addView(action("Defaults",()->{tab="defaults";show();}));nav.addView(action("Backup",()->{tab="backup";show();}));
+        nav.addView(action("Boards",()->{tab="boards";show();}));nav.addView(action("All work",()->{tab="all";show();}));nav.addView(action("Defaults",()->{tab="defaults";show();}));nav.addView(action("Backup",()->{tab="backup";show();}));nav.addView(action("Updates",()->new UpdateManager(this).check(true)));
         ScrollView sv=new ScrollView(this);boardScroll=sv;sv.setFillViewport(true);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));content=vertical();content.setPadding(dp(16),dp(16),dp(16),dp(28));sv.addView(content);
         if(tab.equals("defaults"))defaults();else if(tab.equals("all"))all();else if(tab.equals("backup"))backupView();else if(board()==null)boards();else boardView();
     }
