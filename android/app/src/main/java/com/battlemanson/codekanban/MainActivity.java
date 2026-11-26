@@ -271,12 +271,75 @@ public class MainActivity extends Activity {
     interface TextResult{void done(String s);}
     private void input(String title,String hint,String value,TextResult result){EditText e=new EditText(this);e.setSingleLine();e.setHint(hint);e.setText(value);AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(e).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener(x->dialog.getButton(-1).setOnClickListener(v->{String s=e.getText().toString().trim();if(s.isEmpty()){e.setError("Required");return;}dialog.dismiss();result.done(s);}));dialog.show();}
     private EditText field(LinearLayout l,String label,String value,boolean multi){TextView t=text(label,13,MUTED,true);t.setPadding(0,dp(12),0,0);l.addView(t);EditText e=new EditText(this);e.setText(value);if(multi){e.setMinLines(2);e.setGravity(Gravity.TOP);e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);}else e.setSingleLine();l.addView(e);return e;}
-    private void editCard(JSONObject b,JSONObject c,JSONObject card){ScrollView sc=new ScrollView(this);LinearLayout form=vertical();pad(form,20);sc.addView(form);EditText title=field(form,"Title",card.optString("title"),false),desc=field(form,"Description",card.optString("description"),true),labels=field(form,"Labels (comma separated)",card.optString("labels"),false),due=field(form,"Due date (e.g. 2026-12-31)",card.optString("due"),false),points=field(form,"Story points",card.optString("points"),false),priority=field(form,"Priority",card.optString("priority"),false),difficulty=field(form,"Difficulty",card.optString("difficulty"),false),ado=field(form,"ADO work item",card.optString("ado"),false),sm=field(form,"SM item",card.optString("sm"),false);
-        TextView taskHead=text("CHECKLIST",13,MUTED,true);taskHead.setPadding(0,dp(20),0,dp(8));form.addView(taskHead);JSONArray tasks;try{tasks=new JSONArray(array(card,"tasks").toString());}catch(JSONException ex){throw new IllegalStateException(ex);}LinearLayout taskBox=vertical();form.addView(taskBox);Runnable taskRender=()->{taskBox.removeAllViews();for(int i=0;i<tasks.length();i++){JSONObject task=at(tasks,i);LinearLayout row=new LinearLayout(this);CheckBox check=new CheckBox(this);check.setText(task.optString("title"));check.setChecked(task.optBoolean("done"));row.addView(check,new LinearLayout.LayoutParams(0,-2,1));check.setOnCheckedChangeListener((v,on)->put(task,"done",on));row.addView(action("×",()->{remove(tasks,task.optString("id"));editCardRefresh(taskBox,tasks);}));taskBox.addView(row);}};taskRender.run();form.addView(action("+ Add task",()->input("Add task","Task","",s->{tasks.put(put(put(put(obj(),"id",id()),"title",s),"done",false));editCardRefresh(taskBox,tasks);})) );
-        TextView relations=text("RELATIONSHIPS",13,MUTED,true);relations.setPadding(0,dp(20),0,dp(8));form.addView(relations);
-        try{WorkItemRelations.Entry parent=WorkItemRelations.find(b,card.optString("parentId"));form.addView(text(parent==null?"Parent: none":"Parent: "+parent.card.optString("title"),15,INK,false));int children=0;for(WorkItemRelations.Entry e:WorkItemRelations.entries(b))if(card.optString("id").equals(e.card.optString("parentId"))){form.addView(text("Child: "+e.card.optString("title"),15,INK,false));children++;}if(children==0)form.addView(text("No child work items",14,MUTED,false));form.addView(text("Use More to change parent or convert items and tasks.",13,MUTED,false));}catch(JSONException e){form.addView(text("Unable to load relationships",14,MUTED,false));}
-        EditText comments=field(form,"Comments (one per line)",card.optString("commentsText"),true);
-        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Work item").setView(sc).setNegativeButton("Cancel",(d,w)->show()).setNeutralButton("More",null).setPositiveButton("Save",null).create();dialog.setOnShowListener(x->{dialog.getButton(-1).setOnClickListener(v->{String s=title.getText().toString().trim();if(s.isEmpty()){title.setError("Required");return;}put(card,"tasks",tasks);put(card,"title",s);put(card,"description",desc.getText().toString());put(card,"labels",labels.getText().toString());put(card,"due",due.getText().toString());put(card,"points",points.getText().toString());put(card,"priority",priority.getText().toString());put(card,"difficulty",difficulty.getText().toString());put(card,"ado",ado.getText().toString());put(card,"sm",sm.getText().toString());put(card,"commentsText",comments.getText().toString());save();dialog.dismiss();show();});dialog.getButton(-3).setOnClickListener(v->{dialog.dismiss();cardMenu(b,c,card);});});dialog.show();}
+    /** Returns the body of an independently expandable work-item section. */
+    private LinearLayout editorSection(LinearLayout container,String name,boolean initiallyOpen){
+        LinearLayout section=vertical();section.setBackground(shape(SURFACE,BORDER));
+        LinearLayout.LayoutParams margin=new LinearLayout.LayoutParams(-1,-2);margin.topMargin=dp(10);container.addView(section,margin);
+        LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(dp(14),dp(14),dp(14),dp(14));section.addView(header);
+        TextView label=text(name,17,INK,true);header.addView(label,new LinearLayout.LayoutParams(0,-2,1));TextView arrow=text(initiallyOpen?"▾":"▸",20,MUTED,true);header.addView(arrow);
+        LinearLayout body=vertical();body.setPadding(dp(14),0,dp(14),dp(14));body.setVisibility(initiallyOpen?View.VISIBLE:View.GONE);section.addView(body);
+        header.setContentDescription((initiallyOpen?"Collapse ":"Expand ")+name);header.setOnClickListener(v->{boolean open=body.getVisibility()!=View.VISIBLE;body.setVisibility(open?View.VISIBLE:View.GONE);arrow.setText(open?"▾":"▸");header.setContentDescription((open?"Collapse ":"Expand ")+name);});
+        return body;
+    }
+    private void editorNote(LinearLayout body,String title,String description){
+        TextView heading=text(title,14,INK,true);heading.setPadding(0,dp(16),0,dp(4));body.addView(heading);
+        TextView note=text(description,13,MUTED,false);body.addView(note);
+    }
+    private void restoreObject(JSONObject target,JSONObject snapshot){
+        ArrayList<String> keys=new ArrayList<>();Iterator<String> existing=target.keys();while(existing.hasNext())keys.add(existing.next());
+        for(String key:keys)target.remove(key);Iterator<String> saved=snapshot.keys();while(saved.hasNext()){String key=saved.next();put(target,key,snapshot.opt(key));}
+    }
+    private void editCard(JSONObject b,JSONObject c,JSONObject card){
+        ScrollView sc=new ScrollView(this);sc.setFillViewport(true);LinearLayout form=vertical();form.setPadding(dp(16),dp(8),dp(16),dp(20));form.setBackgroundColor(BG);sc.addView(form);
+        TextView location=text(b.optString("name")+"  ·  "+c.optString("name"),13,MUTED,false);location.setPadding(0,0,0,dp(6));form.addView(location);
+        EditText title=field(form,"Title",card.optString("title"),false);
+        EditText desc=field(form,"Description",card.optString("description"),true);
+        EditText labels=field(form,"Labels (comma separated)",card.optString("labels"),false);
+
+        LinearLayout time=editorSection(form,"Time",false);
+        editorNote(time,"Recurring", "Not available yet on Android.");
+        editorNote(time,"Reminders", "Not available yet on Android.");
+        EditText due=field(time,"Due date (e.g. 2026-12-31)",card.optString("due"),false);
+        LinearLayout history=editorSection(time,"Work item history",false);
+        editorNote(history,"History", "Work item movement history is not available yet.");
+
+        LinearLayout fields=editorSection(form,"Fields",false);
+        JSONObject original=card.optJSONObject("templateData");String preference=card.optString("userPreference",original==null?"":original.optString("userPreference",""));
+        editorNote(fields,"User preference",preference.isEmpty()?"Not ranked · Ranking is not available yet.":preference+" · Ranking is not available yet.");
+        EditText points=field(fields,"Story points",card.optString("points"),false);
+        EditText priority=field(fields,"Priority",card.optString("priority"),false);
+        EditText difficulty=field(fields,"Difficulty estimation",card.optString("difficulty"),false);
+
+        LinearLayout relational=editorSection(form,"Relational",false);
+        EditText ado=field(relational,"ADO work item",card.optString("ado"),false);
+        EditText sm=field(relational,"SM item",card.optString("sm"),false);
+        try{
+            WorkItemRelations.Entry parent=WorkItemRelations.find(b,card.optString("parentId"));
+            editorNote(relational,"Parent",parent==null?"No parent":""+parent.card.optString("title"));
+            StringBuilder children=new StringBuilder();for(WorkItemRelations.Entry entry:WorkItemRelations.entries(b))if(card.optString("id").equals(entry.card.optString("parentId"))){if(children.length()>0)children.append("\n");children.append(entry.card.optString("title"));}
+            editorNote(relational,"Children",children.length()==0?"No child work items":children.toString());
+            relational.addView(action("Manage relationships and conversions",()->{new AlertDialog.Builder(this).setTitle("Discard unsaved edits?").setMessage("Save your changes before managing relationships, or discard them to continue.").setNegativeButton("Keep editing",null).setPositiveButton("Discard and continue",(d,w)->{((AlertDialog)sc.getTag()).dismiss();cardMenu(b,c,card);}).show();}));
+        }catch(JSONException e){editorNote(relational,"Relationships","Unable to load relationships.");}
+        editorNote(relational,"File bookmarks","Not available yet on Android.");
+        TextView taskHead=text("Task list",14,INK,true);taskHead.setPadding(0,dp(18),0,dp(8));relational.addView(taskHead);
+        JSONArray tasks;try{tasks=new JSONArray(array(card,"tasks").toString());}catch(JSONException ex){throw new IllegalStateException(ex);}
+        LinearLayout taskBox=vertical();relational.addView(taskBox);editCardRefresh(taskBox,tasks);
+        relational.addView(action("+ Add task",()->input("Add task","Task","",value->{tasks.put(put(put(put(obj(),"id",id()),"title",value),"done",false));editCardRefresh(taskBox,tasks);})));
+
+        LinearLayout commentSection=editorSection(form,"Comments",true);
+        EditText comments=field(commentSection,"Comments (one per line)",card.optString("commentsText"),true);
+
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Work item").setView(sc).setNegativeButton("Cancel",(d,w)->show()).setNeutralButton("More",null).setPositiveButton("Save",null).create();sc.setTag(dialog);
+        dialog.setOnShowListener(x->{
+            dialog.getButton(-1).setOnClickListener(v->{String value=title.getText().toString().trim();if(value.isEmpty()){title.setError("Required");title.requestFocus();return;}
+                JSONObject previous;try{previous=new JSONObject(card.toString());}catch(JSONException e){error("Could not save work item",e.getMessage());return;}
+                put(card,"tasks",tasks);put(card,"title",value);put(card,"description",desc.getText().toString());put(card,"labels",labels.getText().toString());put(card,"due",due.getText().toString());put(card,"points",points.getText().toString());put(card,"priority",priority.getText().toString());put(card,"difficulty",difficulty.getText().toString());put(card,"ado",ado.getText().toString());put(card,"sm",sm.getText().toString());put(card,"commentsText",comments.getText().toString());
+                if(save()){dialog.dismiss();show();}else restoreObject(card,previous);
+            });
+            dialog.getButton(-3).setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Discard unsaved edits?").setMessage("Save your changes before using work item actions, or discard them to continue.").setNegativeButton("Keep editing",null).setPositiveButton("Discard and continue",(d,w)->{dialog.dismiss();cardMenu(b,c,card);}).show());
+            dialog.getWindow().setLayout(getResources().getDisplayMetrics().widthPixels-dp(24),WindowManager.LayoutParams.WRAP_CONTENT);
+        });dialog.show();
+    }
     private void editCardRefresh(LinearLayout box,JSONArray tasks){box.removeAllViews();for(int i=0;i<tasks.length();i++){JSONObject t=at(tasks,i);LinearLayout row=new LinearLayout(this);CheckBox cb=new CheckBox(this);cb.setText(t.optString("title"));cb.setChecked(t.optBoolean("done"));cb.setOnCheckedChangeListener((v,on)->put(t,"done",on));row.addView(cb,new LinearLayout.LayoutParams(0,-2,1));row.addView(action("×",()->{remove(tasks,t.optString("id"));editCardRefresh(box,tasks);}));box.addView(row);}}
     private boolean transferCard(JSONObject from,JSONObject to,JSONObject card){
         return CardMoves.transfer(from,to,card,this::save);
