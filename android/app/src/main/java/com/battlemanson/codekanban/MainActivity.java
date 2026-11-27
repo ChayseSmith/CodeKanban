@@ -460,7 +460,8 @@ public class MainActivity extends Activity {
     private String soundTitle(Uri uri){try{android.media.Ringtone ringtone=android.media.RingtoneManager.getRingtone(this,uri);return ringtone==null?"Default alarm sound":ringtone.getTitle(this);}catch(Exception e){return "Selected alarm sound";}}
     private void renderCustomButtons(LinearLayout parent,JSONObject board,String source,JSONObject owner,boolean manage){
         JSONArray buttons=owner.optJSONArray("buttons");String bid=board.optString("id"),ownerId=owner.optString("id");
-        if(buttons!=null)for(int i=0;i<buttons.length();i++){JSONObject config=buttons.optJSONObject(i);if(config==null)continue;String id=config.optString("id");TextView button=text(config.optString("label"),14,ACCENT,true);pad(button,12);button.setGravity(Gravity.CENTER);button.setBackground(shape(SURFACE,ACCENT));button.setMinimumHeight(dp(48));button.setFocusable(true);
+        ButtonFlowLayout flow=new ButtonFlowLayout(this);if(buttons!=null&&buttons.length()>0)parent.addView(flow,new LinearLayout.LayoutParams(-1,-2));
+        if(buttons!=null)for(int i=0;i<buttons.length();i++){JSONObject config=buttons.optJSONObject(i);if(config==null)continue;String id=config.optString("id");TextView button=text(config.optString("label"),14,ACCENT,true);pad(button,12);button.setGravity(Gravity.CENTER);button.setBackground(shape(SURFACE,ACCENT));button.setMinimumHeight(dp(48));button.setMinimumWidth(dp(112));button.setFocusable(true);
             button.setContentDescription(config.optString("label")+". Button ID "+id+". Tap, double tap or long press to run configured automations.");
             button.setOnClickListener(v->pressCustomButton(new BoardButtons.Event(bid,source,ownerId,id,"tap")));
             button.setOnLongClickListener(v->{v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);pressCustomButton(new BoardButtons.Event(bid,source,ownerId,id,"longPress"));return true;});
@@ -471,7 +472,7 @@ public class MainActivity extends Activity {
                 @Override public boolean onDoubleTapEvent(android.view.MotionEvent e){if(e.getActionMasked()==android.view.MotionEvent.ACTION_UP&&button.isAttachedToWindow())pressCustomButton(new BoardButtons.Event(bid,source,ownerId,id,"doubleTap"));return true;}
                 @Override public void onLongPress(android.view.MotionEvent e){if(button.isAttachedToWindow())button.performLongClick();}
             });button.setOnTouchListener((v,event)->{detector.onTouchEvent(event);return true;});
-            LinearLayout.LayoutParams spacing=new LinearLayout.LayoutParams(-1,-2);spacing.topMargin=dp(6);spacing.bottomMargin=dp(6);parent.addView(button,spacing);
+            flow.addView(button);
         }
         if(manage)parent.addView(action("Manage buttons",()->manageButtons(bid,source,ownerId)));
     }
