@@ -87,11 +87,26 @@ public class MainActivity extends Activity {
     }
     private boolean save(){try{ReminderSubscriptions.prepare(this,data,false);}catch(JSONException e){error("Could not prepare reminders",e.getMessage());return false;}android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;try{out=file.startWrite();out.write(data.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}queueBackup();syncReminders();return true;}
     private GradientDrawable shape(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(16));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
-    private Drawable columnBackground(JSONObject column,boolean highlighted){
-        final int color=parseColor(column.optString("color"));
+    private Drawable columnBackground(JSONObject column,boolean highlighted){return roundedAccentBackground(parseColor(column.optString("color")),highlighted);}
+    private Drawable roundedAccentBackground(int color,boolean highlighted){
         return new Drawable(){final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
-            @Override public void draw(Canvas canvas){android.graphics.Rect b=getBounds();float radius=dp(16);paint.setColor(SURFACE);paint.setStyle(Paint.Style.FILL);canvas.drawRoundRect(b.left,b.top,b.right,b.bottom,radius,radius,paint);canvas.save();android.graphics.Path clip=new android.graphics.Path();clip.addRoundRect(b.left,b.top,b.right,b.bottom,radius,radius,android.graphics.Path.Direction.CW);canvas.clipPath(clip);paint.setColor(color);canvas.drawRect(b.left,b.top,b.left+dp(4),b.bottom,paint);canvas.restore();paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(highlighted?2:1));paint.setColor(highlighted?color:BORDER);float inset=paint.getStrokeWidth()/2;canvas.drawRoundRect(b.left+inset,b.top+inset,b.right-inset,b.bottom-inset,radius,radius,paint);paint.setStyle(Paint.Style.FILL);}
-            @Override public void setAlpha(int alpha){} @Override public void setColorFilter(ColorFilter filter){} @Override public int getOpacity(){return PixelFormat.TRANSLUCENT;}};
+            @Override public void draw(Canvas canvas){
+                Rect bounds=getBounds();float radius=Math.min(dp(16),Math.min(bounds.width(),bounds.height())/2f);
+                paint.setStyle(Paint.Style.FILL);paint.setColor(SURFACE);canvas.drawRoundRect(bounds.left,bounds.top,bounds.right,bounds.bottom,radius,radius,paint);
+                float border=dp(highlighted?2:1),edge=border/2;
+                paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(border);paint.setColor(highlighted?color:BORDER);
+                canvas.drawRoundRect(bounds.left+edge,bounds.top+edge,bounds.right-edge,bounds.bottom-edge,Math.max(0,radius-edge),Math.max(0,radius-edge),paint);
+                float width=Math.min(dp(4),Math.min(bounds.width(),bounds.height())),inset=width/2,curve=Math.max(0,radius-inset);
+                float left=bounds.left+inset,top=bounds.top+inset,bottom=bounds.bottom-inset;
+                android.graphics.Path accent=new android.graphics.Path();accent.moveTo(left+curve,top);
+                if(curve>0)accent.arcTo(new android.graphics.RectF(left,top,left+2*curve,top+2*curve),270,-90);
+                accent.lineTo(left,bottom-curve);
+                if(curve>0)accent.arcTo(new android.graphics.RectF(left,bottom-2*curve,left+2*curve,bottom),180,-90);
+                paint.setStrokeWidth(width);paint.setStrokeCap(Paint.Cap.BUTT);paint.setColor(color);canvas.drawPath(accent,paint);
+            }
+            @Override public void getOutline(android.graphics.Outline outline){outline.setRoundRect(getBounds(),dp(16));}
+            @Override public void setAlpha(int alpha){} @Override public void setColorFilter(ColorFilter filter){} @Override public int getOpacity(){return PixelFormat.TRANSLUCENT;}
+        };
     }
     private TextView text(String s,int size,int color,boolean bold){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);if(bold)t.setTypeface(null,Typeface.BOLD);return t;}
     private LinearLayout vertical(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
@@ -110,7 +125,9 @@ public class MainActivity extends Activity {
         });
         setContentView(root);root.requestApplyInsets();
         LinearLayout header=vertical();header.setBackgroundColor(SURFACE);header.setPadding(dp(20),dp(18),dp(20),dp(12));root.addView(header);
-        TextView brand=text("CODE KANBAN",12,ACCENT,true);header.addView(brand);
+        LinearLayout brandRow=new LinearLayout(this);brandRow.setGravity(Gravity.CENTER_VERTICAL);header.addView(brandRow);
+        TextView brand=text("CODE KANBAN",12,ACCENT,true);brandRow.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        if("beta".equals(getSharedPreferences("app_updates",MODE_PRIVATE).getString("channel","stable"))){TextView build=text("Build "+BuildConfig.VERSION_CODE,12,MUTED,false);build.setGravity(Gravity.RIGHT);brandRow.addView(build);}
         String title=tab.equals("boards")?(board()==null?"Your boards":board().optString("name")):tab.equals("all")?"Across boards":tab.equals("reminders")?"Reminders":"Settings";
         LinearLayout titleRow=new LinearLayout(this);titleRow.setGravity(Gravity.CENTER_VERTICAL);header.addView(titleRow);if(tab.equals("boards")&&board()!=null){TextView icon=boardIcon(board(),22);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(36),dp(36));p.rightMargin=dp(10);titleRow.addView(icon,p);}TextView h=text(title,27,INK,true);titleRow.addView(h,new LinearLayout.LayoutParams(0,-2,1));TextView sub=text(tab.equals("boards")?(board()==null?"Organize work, your way":"Board · "+path(board())):tab.equals("all")?"Work items from every board":tab.equals("reminders")?"Manage alerts on this device":"Appearance, templates, updates and backups",13,MUTED,false);header.addView(sub);
         HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);LinearLayout nav=new LinearLayout(this);scroll.addView(nav);header.addView(scroll);
@@ -355,7 +372,7 @@ public class MainActivity extends Activity {
         TextView channelLabel=text("Release channel",16,INK,true);content.addView(channelLabel);
         Spinner channel=new Spinner(this);channel.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Stable","Beta"}));
         channel.setSelection("beta".equals(getSharedPreferences("app_updates",MODE_PRIVATE).getString("channel","stable"))?1:0);content.addView(channel);
-        channel.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){String selected=position==1?"beta":"stable";String previous=getSharedPreferences("app_updates",MODE_PRIVATE).getString("channel","stable");if(!selected.equals(previous)){getSharedPreferences("app_updates",MODE_PRIVATE).edit().putString("channel",selected).apply();new UpdateManager(MainActivity.this).check(true);}}});
+        channel.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){String selected=position==1?"beta":"stable";String previous=getSharedPreferences("app_updates",MODE_PRIVATE).getString("channel","stable");if(!selected.equals(previous)){getSharedPreferences("app_updates",MODE_PRIVATE).edit().putString("channel",selected).apply();show();new UpdateManager(MainActivity.this).check(true);}}});
 
         }
         TextView backupToggle=action((backupExpanded?"▾":"▸")+"  Backup",()->{backupExpanded=!backupExpanded;show();});backupToggle.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);backupToggle.setContentDescription((backupExpanded?"Collapse":"Expand")+" Backup");content.addView(backupToggle);
@@ -426,9 +443,8 @@ public class MainActivity extends Activity {
             try{JSONArray boards=array(data,"boards");for(int b=0;b<boards.length();b++){JSONObject board=boards.getJSONObject(b);for(WorkItemRelations.Entry entry:WorkItemRelations.entries(board)){JSONArray reminders=entry.card.optJSONArray("reminders");if(reminders==null)continue;
                 for(int r=0;r<reminders.length();r++){JSONObject reminder=reminders.optJSONObject(r);if(reminder==null)continue;String title=entry.card.optString("title"),location=path(board),date=localDateTime(ReminderScheduler.time(reminder));if(!(title+" "+location+" "+date).toLowerCase(Locale.ROOT).contains(query))continue;count++;
                     boolean subscribed=ReminderSubscriptions.subscribed(this,entry.card.optString("id"),reminder);int color=Color.parseColor(subscribed?"#22C55E":"#EF4444");
-                    LinearLayout row=new LinearLayout(this);row.setBackground(shape(SURFACE,BORDER));row.setOutlineProvider(ViewOutlineProvider.BACKGROUND);row.setClipToOutline(true);LinearLayout.LayoutParams spacing=new LinearLayout.LayoutParams(-1,-2);spacing.bottomMargin=dp(10);results.addView(row,spacing);
-                    View boundary=new View(this);boundary.setBackgroundColor(color);row.addView(boundary,new LinearLayout.LayoutParams(dp(4),-1));
-                    LinearLayout body=vertical();pad(body,14);row.addView(body,new LinearLayout.LayoutParams(0,-2,1));TextView name=text(title,17,INK,true);body.addView(name);row.setOnClickListener(v->editCard(board,entry.column,entry.card));
+                    LinearLayout row=new LinearLayout(this);row.setBackground(roundedAccentBackground(color,false));row.setOutlineProvider(ViewOutlineProvider.BACKGROUND);row.setClipToOutline(true);LinearLayout.LayoutParams spacing=new LinearLayout.LayoutParams(-1,-2);spacing.bottomMargin=dp(10);results.addView(row,spacing);
+                    LinearLayout body=vertical();pad(body,14);body.setPadding(dp(18),dp(14),dp(14),dp(14));row.addView(body,new LinearLayout.LayoutParams(0,-2,1));TextView name=text(title,17,INK,true);body.addView(name);row.setOnClickListener(v->editCard(board,entry.column,entry.card));
                     body.addView(text(location+" · "+entry.column.optString("name"),13,MUTED,false));body.addView(text(date+(reminder.optBoolean("fullScreen")?" · Full-screen alarm":" · Notification"),14,INK,false));
                     body.addView(text(subscribed?"Subscribed on this device":"Not subscribed on this device",14,color,true));
                     body.addView(action(subscribed?"Unsubscribe":"Subscribe on this device",()->{
