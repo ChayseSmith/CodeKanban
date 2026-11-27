@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private int INK, MUTED, ACCENT, BG, SURFACE, BORDER; private boolean dark;
+    private BoardButtons.Event pendingButtonEvent;
     private JSONObject automationBaseline;private boolean suppressAutomationOnce;
     private final Runnable automationTick=new Runnable(){@Override public void run(){if(hasWindowFocus())evaluateAutomations();updateHandler.postDelayed(this,60_000);}};
     private JSONObject data; private String current="", tab="boards"; private LinearLayout root, content; private ScrollView boardScroll;
@@ -90,11 +91,11 @@ public class MainActivity extends Activity {
     private boolean save(){
         android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;
         try{JSONObject draft=BoardTemplate.copy(data);long now=System.currentTimeMillis();
-            if(suppressAutomationOnce){AutomationEngine.initialize(draft,now);suppressAutomationOnce=false;}else AutomationEngine.run(draft,automationBaseline==null?BoardTemplate.copy(data):automationBaseline,now,ReminderSubscriptions.device(this));
+            if(suppressAutomationOnce){AutomationEngine.initialize(draft,now);suppressAutomationOnce=false;}else AutomationEngine.run(draft,automationBaseline==null?BoardTemplate.copy(data):automationBaseline,now,ReminderSubscriptions.device(this),pendingButtonEvent);
             ReminderSubscriptions.prepare(this,draft,false);JSONObject baseline=BoardTemplate.copy(draft);
             out=file.startWrite();out.write(draft.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);out=null;
             AutomationEngine.adopt(data,draft);automationBaseline=baseline;
-        }catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}
+        }catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}finally{pendingButtonEvent=null;}
         queueBackup();syncReminders();return true;
     }
     private void evaluateAutomations(){
@@ -181,6 +182,8 @@ public class MainActivity extends Activity {
     private JSONObject newColumn(String name,String color){return put(put(put(put(obj(),"id",id()),"name",name),"color",color),"cards",arr());}
     private void boardView(){dropColumns.clear();dropBoards.clear();cardViews.clear();JSONObject b=board();if(b==null){current="";show();return;}String bid=current;
         LinearLayout row=new LinearLayout(this);row.addView(action("‹ Back",()->{if(b.optString("parent").isEmpty()){current="";show();}else openBoard(b.optString("parent"));}));row.addView(action("+ Nested board",()->newBoard(bid)));row.addView(action("⋮",()->boardMenu(b)));content.addView(row);
+        TextView buttonsToggle=action((b.optBoolean("boardButtonsCollapsed",true)?"▸":"▾")+"  Board buttons",()->{boolean before=b.optBoolean("boardButtonsCollapsed",true);put(b,"boardButtonsCollapsed",!before);if(!save())put(b,"boardButtonsCollapsed",before);refreshKeepingScroll();});buttonsToggle.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);buttonsToggle.setContentDescription((b.optBoolean("boardButtonsCollapsed",true)?"Expand":"Collapse")+" Board buttons");content.addView(buttonsToggle);
+        if(!b.optBoolean("boardButtonsCollapsed",true)){LinearLayout controls=vertical();content.addView(controls);renderCustomButtons(controls,b,"board",b,true);}
         JSONArray boards=array(data,"boards");boolean children=false;for(int i=0;i<boards.length();i++){JSONObject child=at(boards,i);if(bid.equals(child.optString("parent"))){if(!children)section("Nested boards");children=true;boardTile(child);}}
         dragBoardTargets=vertical();dragBoardTargets.setVisibility(View.GONE);content.addView(dragBoardTargets);TextView hint=text("DROP ON A BOARD TO MOVE",13,MUTED,true);pad(hint,10);dragBoardTargets.addView(hint);for(int i=0;i<boards.length();i++){JSONObject target=at(boards,i);if(target==b)continue;LinearLayout destination=new LinearLayout(this);destination.setGravity(Gravity.CENTER_VERTICAL);pad(destination,10);destination.setBackground(shape(SURFACE,BORDER));TextView icon=boardIcon(target,20);LinearLayout.LayoutParams iconSize=new LinearLayout.LayoutParams(dp(34),dp(34));iconSize.rightMargin=dp(10);destination.addView(icon,iconSize);destination.addView(text(path(target),16,INK,true),new LinearLayout.LayoutParams(0,-2,1));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(8);dragBoardTargets.addView(destination,p);dropBoards.put(destination,target);}
         LinearLayout columnHeader=new LinearLayout(this);columnHeader.setGravity(Gravity.CENTER_VERTICAL);TextView heading=text("Columns",18,INK,true);columnHeader.addView(heading,new LinearLayout.LayoutParams(0,-2,1));columnHeader.addView(action("Collapse all",()->collapseAllColumns(b)));content.addView(columnHeader);
@@ -210,6 +213,7 @@ public class MainActivity extends Activity {
         LinearLayout body=vertical();box.addView(body);body.setVisibility(c.optBoolean("collapsed")?View.GONE:View.VISIBLE);
         head.setContentDescription((c.optBoolean("collapsed")?"Expand ":"Collapse ")+c.optString("name"));
         head.setOnClickListener(v->{boolean was=c.optBoolean("collapsed"),next=!was;put(c,"collapsed",next);if(!save()){put(c,"collapsed",was);return;}body.setVisibility(next?View.GONE:View.VISIBLE);toggle.setText(next?"▸  ":"▾  ");head.setContentDescription((next?"Expand ":"Collapse ")+c.optString("name"));});
+        renderCustomButtons(body,b,"column",c,true);
         JSONArray cards=array(c,"cards");for(int i=0;i<cards.length();i++){JSONObject card=at(cards,i);LinearLayout cardView=boardCard(b,c,card);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(7);body.addView(cardView,p);cardViews.put(card.optString("id"),cardView);}body.addView(action("+ Add work item",()->input("New work item","Title","",name->{JSONObject card=put(put(put(obj(),"id",id()),"title",name),"tasks",arr());put(card,"comments",arr());cards.put(card);save();show();})));
     }
     private LinearLayout boardCard(JSONObject board,JSONObject column,JSONObject card){
@@ -233,6 +237,7 @@ public class MainActivity extends Activity {
             ArrayList<WorkItemRelations.Entry> children=new ArrayList<>();for(WorkItemRelations.Entry entry:WorkItemRelations.entries(board))if(!card.optString("id").equals(entry.card.optString("id"))&&card.optString("id").equals(entry.card.optString("parentId")))children.add(entry);
             if(!children.isEmpty())addChildSection(view,board,card,children);
         }catch(JSONException e){TextView warning=text("Relationships unavailable",13,MUTED,false);view.addView(warning);}
+        renderCustomButtons(view,board,"item",card,false);
         view.setOnClickListener(v->editCard(board,column,card));view.setOnLongClickListener(v->{v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);cardMenu(board,column,card);return true;});view.setOnTouchListener(new CardTouch(board,column,card));return view;
     }
     private void appendCardField(StringBuilder line,String label,String value){if(value==null||value.trim().isEmpty()||"null".equals(value))return;if(line.length()>0)line.append("  ·  ");line.append(label).append(": ").append(value.trim());}
@@ -258,13 +263,14 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle(task.optString("title")).setItems(new String[]{"Convert to work item","Delete task"},(d,n)->{if(n==0)convert.run();else delete.run();}).show();
     }
     private void cardMenu(JSONObject b,JSONObject c,JSONObject card){
-        new AlertDialog.Builder(this).setTitle(card.optString("title")).setItems(new String[]{"Edit", "Move to column", "Move to board", "Set or clear parent", "Convert task to work item", "Convert work item to task", "Delete"},(dialog,choice)->{
+        new AlertDialog.Builder(this).setTitle(card.optString("title")).setItems(new String[]{"Edit", "Move to column", "Move to board", "Set or clear parent", "Convert task to work item", "Convert work item to task", "Manage buttons", "Delete"},(dialog,choice)->{
             if(choice==0)editCard(b,c,card);
             else if(choice==1)moveCard(b,c,card);
             else if(choice==2)chooseBoard(b,card);
             else if(choice==3)chooseParent(b,card);
             else if(choice==4)chooseTaskToConvert(b,card);
             else if(choice==5)convertToTask(b,card);
+            else if(choice==6)manageButtons(b.optString("id"),"item",card.optString("id"));
             else new AlertDialog.Builder(this).setTitle("Delete work item?").setMessage("This permanently deletes the item and removes its children's parent links.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->mutateBoard(b, draft->{WorkItemRelations.Entry entry=WorkItemRelations.find(draft,card.optString("id"));if(entry==null)throw new JSONException("Work item not found.");if(WorkItemRelations.hasArchivedChild(draft,card.optString("id")))throw new JSONException("This item has archived children; deleting it is not supported yet.");for(WorkItemRelations.Entry item:WorkItemRelations.entries(draft))if(card.optString("id").equals(item.card.optString("parentId")))item.card.remove("parentId");WorkItemRelations.remove(entry.column,entry.card);})).show();
         }).show();
     }
@@ -452,6 +458,42 @@ public class MainActivity extends Activity {
         return true;
     }
     private String soundTitle(Uri uri){try{android.media.Ringtone ringtone=android.media.RingtoneManager.getRingtone(this,uri);return ringtone==null?"Default alarm sound":ringtone.getTitle(this);}catch(Exception e){return "Selected alarm sound";}}
+    private void renderCustomButtons(LinearLayout parent,JSONObject board,String source,JSONObject owner,boolean manage){
+        JSONArray buttons=owner.optJSONArray("buttons");String bid=board.optString("id"),ownerId=owner.optString("id");
+        if(buttons!=null)for(int i=0;i<buttons.length();i++){JSONObject config=buttons.optJSONObject(i);if(config==null)continue;String id=config.optString("id");TextView button=text(config.optString("label"),14,ACCENT,true);pad(button,12);button.setGravity(Gravity.CENTER);button.setBackground(shape(SURFACE,ACCENT));button.setMinimumHeight(dp(48));button.setFocusable(true);
+            button.setContentDescription(config.optString("label")+". Button ID "+id+". Tap, double tap or long press to run configured automations.");
+            button.setOnClickListener(v->pressCustomButton(new BoardButtons.Event(bid,source,ownerId,id,"tap")));
+            button.setOnLongClickListener(v->{v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);pressCustomButton(new BoardButtons.Event(bid,source,ownerId,id,"longPress"));return true;});
+            GestureDetector detector=new GestureDetector(this,new GestureDetector.SimpleOnGestureListener(){
+                @Override public boolean onDown(android.view.MotionEvent e){return true;}
+                @Override public boolean onSingleTapConfirmed(android.view.MotionEvent e){if(button.isAttachedToWindow())button.performClick();return true;}
+                @Override public boolean onDoubleTap(android.view.MotionEvent e){return true;}
+                @Override public boolean onDoubleTapEvent(android.view.MotionEvent e){if(e.getActionMasked()==android.view.MotionEvent.ACTION_UP&&button.isAttachedToWindow())pressCustomButton(new BoardButtons.Event(bid,source,ownerId,id,"doubleTap"));return true;}
+                @Override public void onLongPress(android.view.MotionEvent e){if(button.isAttachedToWindow())button.performLongClick();}
+            });button.setOnTouchListener((v,event)->{detector.onTouchEvent(event);return true;});
+            LinearLayout.LayoutParams spacing=new LinearLayout.LayoutParams(-1,-2);spacing.topMargin=dp(6);spacing.bottomMargin=dp(6);parent.addView(button,spacing);
+        }
+        if(manage)parent.addView(action("Manage buttons",()->manageButtons(bid,source,ownerId)));
+    }
+    private void pressCustomButton(BoardButtons.Event event){
+        long before=automationRuns();pendingButtonEvent=event;if(save()){refreshKeepingScroll();Toast.makeText(this,automationRuns()>before?"Automation applied":"No matching automation for this button gesture",Toast.LENGTH_SHORT).show();}
+    }
+    private long automationRuns(){long total=0;JSONArray rules=data.optJSONArray("automations");if(rules!=null)for(int i=0;i<rules.length();i++)total+=rules.optJSONObject(i).optLong("runCount");return total;}
+    private void manageButtons(String boardId,String source,String ownerId){
+        try{JSONObject owner=BoardButtons.owner(data,boardId,source,ownerId);if(owner==null){error("Buttons unavailable","This board, column or work item no longer exists.");return;}JSONArray buttons=owner.optJSONArray("buttons");int count=buttons==null?0:buttons.length();String[] names=new String[count+1];for(int i=0;i<count;i++)names[i]=buttons.getJSONObject(i).optString("label")+" ["+buttons.getJSONObject(i).optString("id")+"]";names[count]="+ Add button";
+            new AlertDialog.Builder(this).setTitle("Manage "+(source.equals("item")?"work item":source)+" buttons").setItems(names,(d,n)->{try{editCustomButton(boardId,source,ownerId,n==count?null:BoardTemplate.copy(buttons.getJSONObject(n)));}catch(JSONException e){error("Could not open button",e.getMessage());}}).setNegativeButton("Close",null).show();
+        }catch(JSONException e){error("Could not list buttons",e.getMessage());}
+    }
+    private void editCustomButton(String boardId,String source,String ownerId,JSONObject original){
+        LinearLayout form=vertical();pad(form,20);EditText label=field(form,"Label",original==null?"":original.optString("label"),false),id=field(form,"Button ID",original==null?"":original.optString("id"),false);TextView help=text("Match this ID in an automation's button trigger. IDs are case-sensitive and unique within this button location. Changing an ID requires updating its automation rules. Tap, double tap and long press can each run different rules.",13,MUTED,false);form.addView(help);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(original==null?"Add button":"Edit button").setView(form).setNegativeButton("Cancel",null).setNeutralButton(original==null?null:"Delete",(d,w)->new AlertDialog.Builder(this).setTitle("Delete button?").setMessage("Automation rules are kept, but this button will no longer trigger them.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(x,y)->updateCustomButton(boardId,source,ownerId,original,null)).show()).setPositiveButton("Save",null).create();
+        dialog.setOnShowListener(d->dialog.getButton(-1).setOnClickListener(v->{try{JSONObject button=new JSONObject().put("id",id.getText().toString().trim()).put("label",label.getText().toString().trim());if(updateCustomButton(boardId,source,ownerId,original,button))dialog.dismiss();}catch(JSONException e){id.setError(e.getMessage());}}));dialog.show();
+    }
+    private boolean updateCustomButton(String boardId,String source,String ownerId,JSONObject original,JSONObject replacement){
+        JSONObject previous=data;try{JSONObject draft=BoardTemplate.copy(data),owner=BoardButtons.owner(draft,boardId,source,ownerId);if(owner==null)throw new JSONException("Button location no longer exists.");JSONArray buttons=array(owner,"buttons");int index=-1;if(original!=null)for(int i=0;i<buttons.length();i++)if(buttons.getJSONObject(i).optString("id").equals(original.optString("id"))){index=i;break;}
+            if(original!=null&&index<0)throw new JSONException("This button no longer exists.");if(replacement==null)buttons.remove(index);else if(index>=0)buttons.put(index,replacement);else buttons.put(replacement);BoardButtons.validate(buttons);data=draft;if(!save()){data=previous;return false;}refreshKeepingScroll();return true;
+        }catch(JSONException e){data=previous;error("Could not save button",e.getMessage());return false;}
+    }
     private void automationsView(){
         empty("Choose a trigger, optional conditions, and one or more actions. Rules run top to bottom; the last color action that runs wins. Age rules run while the app is visible and when it opens, not continuously in the background.");
         button("+ Create automation",()->AutomationEditor.show(this,data,null,INK,MUTED,this::saveAutomation));
@@ -460,7 +502,7 @@ public class MainActivity extends Activity {
         for(int i=0;i<rules.length();i++){JSONObject rule=at(rules,i);if(rule==null)continue;LinearLayout row=tile();LinearLayout heading=new LinearLayout(this);heading.setGravity(Gravity.CENTER_VERTICAL);row.addView(heading);
             TextView title=text(rule.optString("name"),17,INK,true);heading.addView(title,new LinearLayout.LayoutParams(0,-2,1));Switch enabled=new Switch(this);enabled.setContentDescription("Enable "+rule.optString("name"));enabled.setChecked(rule.optBoolean("enabled",true));heading.addView(enabled);
             enabled.setOnCheckedChangeListener((v,on)->{put(rule,"enabled",on);if(!save())put(rule,"enabled",!on);show();});
-            String scope=rule.optString("boardId");JSONObject board=find(array(data,"boards"),scope);row.addView(text((scope.isEmpty()?"All boards":board==null?"Unavailable board":path(board))+" · "+rule.optString("trigger")+" · "+array(rule,"conditions").length()+" conditions · "+array(rule,"actions").length()+" actions",13,MUTED,false));
+            String scope=rule.optString("boardId");JSONObject board=find(array(data,"boards"),scope);row.addView(text((scope.isEmpty()?"All boards":board==null?"Unavailable board":path(board))+" · "+rule.optString("trigger")+(rule.optString("trigger").startsWith("button")?" ["+rule.optString("buttonId")+"]":"")+" · "+array(rule,"conditions").length()+" conditions · "+array(rule,"actions").length()+" actions",13,MUTED,false));
             if(rule.has("lastRunAt"))row.addView(text("Last run: "+localDateTime(rule.optLong("lastRunAt"))+" · "+rule.optLong("runCount")+" item runs",13,MUTED,false));if(rule.has("error"))row.addView(text(rule.optString("error"),13,Color.rgb(239,68,68),false));
             row.setOnClickListener(v->AutomationEditor.show(this,data,rule,INK,MUTED,this::saveAutomation));
             row.setOnLongClickListener(v->{new AlertDialog.Builder(this).setTitle(rule.optString("name")).setItems(new String[]{"Edit","Move up","Move down","Delete"},(d,choice)->{

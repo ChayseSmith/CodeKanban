@@ -5,7 +5,7 @@ import java.util.*;
 
 /** Deterministic rule evaluation on a caller-owned draft. No Android or network dependency. */
 final class AutomationEngine {
-    static final String[] TRIGGERS={"created","updated","moved","conditions"};
+    static final String[] TRIGGERS={"created","updated","moved","conditions","buttonTap","buttonDoubleTap","buttonLongPress"};
     static final String[] FIELDS={"column","previousColumn","ageHours","columnAgeHours","title","description","labels","priority","points","difficulty","overdue","tasksComplete"};
     static final String[] OPS={"eq","ne","contains","gte","lte"};
     static final String[] ACTIONS={"color","clearColor","completeTasks","reopenTasks","reminder","label","priority","points","difficulty"};
@@ -23,6 +23,7 @@ final class AutomationEngine {
         if(rule.optString("id").isEmpty()||rule.optString("name").trim().isEmpty())throw new JSONException("Give the automation a name.");
         if(!Arrays.asList(TRIGGERS).contains(rule.optString("trigger")))throw new JSONException("Choose a supported trigger.");
         if(!Arrays.asList("all","any").contains(rule.optString("match","all")))throw new JSONException("Choose All or Any conditions.");
+        if(rule.optString("trigger").startsWith("button")){if(!BoardButtons.validId(rule.optString("buttonId")))throw new JSONException("Enter a valid button ID to match.");if(!Arrays.asList(BoardButtons.SOURCES).contains(rule.optString("buttonSource","any")))throw new JSONException("Choose a button location.");}
         JSONArray conditions=rule.getJSONArray("conditions"),actions=rule.getJSONArray("actions");
         if(actions.length()==0)throw new JSONException("Add at least one action.");
         for(int i=0;i<conditions.length();i++){JSONObject c=conditions.getJSONObject(i);String field=c.getString("field"),op=c.getString("op");
@@ -50,6 +51,10 @@ final class AutomationEngine {
     }
     /** Event rules use only user changes, not actions produced by earlier rules. */
     static boolean run(JSONObject draft,JSONObject baseline,long now,String device)throws JSONException{
+        return run(draft,baseline,now,device,null);
+    }
+    static boolean run(JSONObject draft,JSONObject baseline,long now,String device,BoardButtons.Event button)throws JSONException{
+        if(button!=null&&!BoardButtons.exists(draft,button))throw new JSONException("The pressed button no longer exists.");
         String original=draft.toString();List<Item> old=items(baseline),current=items(draft);
         for(Item item:current){Item before=previous(item,old,current);if(!item.card.has("createdAt"))item.card.put("createdAt",now);
             if(before==null||!before.column.optString("id").equals(item.column.optString("id"))||!before.board.optString("id").equals(item.board.optString("id")))item.card.put("columnEnteredAt",now);
@@ -61,13 +66,16 @@ final class AutomationEngine {
         for(int r=0;r<rules.length();r++){JSONObject rule=rules.getJSONObject(r);String rid=rule.optString("id");activeRules.add(rid);
             if(!rule.optBoolean("enabled",true)){state.remove(rid);continue;}
             try{validate(rule);}catch(JSONException invalid){rule.put("error",invalid.getMessage());continue;}
+            boolean buttonRule=rule.optString("trigger").startsWith("button");
+            if(buttonRule&&(button==null||!rule.optString("buttonId").equals(button.button)||!rule.optString("buttonSource","any").equals("any")&&!rule.optString("buttonSource").equals(button.source)))continue;
             rule.remove("error");JSONObject matches=state.optJSONObject(rid);if(matches==null){matches=new JSONObject();state.put(rid,matches);}
             Set<String> live=new HashSet<>();
             for(int i=0;i<events.size();i++){Item event=events.get(i),target=current.get(i),before=previous(event,old,events);String key=event.key();live.add(key);
                 String scope=rule.optString("boardId");if(!scope.isEmpty()&&!scope.equals(event.board.optString("id"))){matches.remove(key);continue;}
+                if(buttonRule&&!button.includes(event))continue;
                 boolean match=matches(rule,event,before,now),was=matches.optBoolean(key);if(match)matches.put(key,true);else matches.remove(key);
                 boolean moved=before!=null&&(!before.column.optString("id").equals(event.column.optString("id"))||!before.board.optString("id").equals(event.board.optString("id")));
-                String trigger=rule.optString("trigger");boolean fire=trigger.equals("created")?before==null:trigger.equals("moved")?moved:trigger.equals("updated")?before!=null&&!content(before.card).equals(content(event.card)):!was;
+                String trigger=rule.optString("trigger");boolean fire=buttonRule?trigger.equals(button.gesture.equals("tap")?"buttonTap":button.gesture.equals("doubleTap")?"buttonDoubleTap":"buttonLongPress"):trigger.equals("created")?before==null:trigger.equals("moved")?moved:trigger.equals("updated")?before!=null&&!content(before.card).equals(content(event.card)):!was;
                 if(!match||!fire)continue;
                 JSONArray actions=rule.getJSONArray("actions");for(int a=0;a<actions.length();a++)act(target.card,actions.getJSONObject(a),rid,now,device);
                 rule.put("lastRunAt",now).put("runCount",rule.optLong("runCount")+1);

@@ -1,0 +1,37 @@
+package com.battlemanson.codekanban;
+import org.json.*;
+
+public final class BoardButtonsTest {
+    static final long NOW=2_000_000_000_000L;
+    static void check(boolean value,String message){if(!value)throw new AssertionError(message);}
+    static JSONObject button()throws Exception{return new JSONObject().put("id","reset-colors").put("label","Reset colors");}
+    static JSONObject item(String id)throws Exception{return new JSONObject().put("id",id).put("title",id).put("createdAt",NOW-1000).put("columnEnteredAt",NOW-1000).put("automationColor","#EF4444").put("buttons",new JSONArray().put(button()));}
+    static JSONObject fixture()throws Exception{
+        JSONObject board=new JSONObject().put("id","board").put("name","Board").put("buttons",new JSONArray().put(button())).put("columns",new JSONArray().put(new JSONObject().put("id","one").put("name","One").put("buttons",new JSONArray().put(button())).put("cards",new JSONArray().put(item("a")).put(item("b")))).put(new JSONObject().put("id","two").put("name","Two").put("cards",new JSONArray().put(item("c")))));
+        JSONObject other=new JSONObject().put("id","other").put("name","Other").put("columns",new JSONArray().put(new JSONObject().put("id","three").put("name","Three").put("cards",new JSONArray().put(item("d")))));
+        return new JSONObject().put("boards",new JSONArray().put(board).put(other)).put("automations",new JSONArray().put(rule("buttonTap","clearColor","")));
+    }
+    static JSONObject rule(String trigger,String action,String value)throws Exception{return new JSONObject().put("id",trigger).put("name",trigger).put("trigger",trigger).put("buttonId","reset-colors").put("buttonSource","any").put("conditions",new JSONArray()).put("actions",new JSONArray().put(new JSONObject().put("type",action).put("value",value)));}
+    static JSONObject card(JSONObject data,String id)throws Exception{for(AutomationEngine.Item item:AutomationEngine.items(data))if(item.card.optString("id").equals(id))return item.card;throw new AssertionError("Missing item");}
+    public static void main(String[] args)throws Exception{
+        JSONObject data=fixture(),before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW,"device",new BoardButtons.Event("board","board","board","reset-colors","tap"));
+        check(!card(data,"a").has("automationColor")&&!card(data,"b").has("automationColor")&&!card(data,"c").has("automationColor"),"Board button targets all direct board items");check(card(data,"d").has("automationColor"),"Other boards remain untouched");
+        data=fixture();before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW,"device",new BoardButtons.Event("board","column","one","reset-colors","tap"));
+        check(!card(data,"a").has("automationColor")&&!card(data,"b").has("automationColor")&&card(data,"c").has("automationColor"),"Column button targets only its column");
+        data=fixture();before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW,"device",new BoardButtons.Event("board","item","a","reset-colors","tap"));check(!card(data,"a").has("automationColor")&&card(data,"b").has("automationColor"),"Work item button targets only its item");check(card(data,"a").getLong("columnEnteredAt")==NOW-1000,"Button does not reset column age");
+        data=fixture();data.getJSONArray("automations").put(0,rule("buttonTap","priority","1")).put(rule("buttonDoubleTap","points","2")).put(rule("buttonLongPress","difficulty","3"));before=BoardTemplate.copy(data);
+        AutomationEngine.run(data,before,NOW,"device",new BoardButtons.Event("board","item","a","reset-colors","doubleTap"));check(card(data,"a").optString("points").equals("2")&&!card(data,"a").has("priority")&&!card(data,"a").has("difficulty"),"Double tap matches only double-tap rule");
+        before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW+1,"device",new BoardButtons.Event("board","item","a","reset-colors","longPress"));check(card(data,"a").optString("difficulty").equals("3")&&!card(data,"a").has("priority"),"Long press does not trigger tap");
+        before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW+2,"device",new BoardButtons.Event("board","item","a","reset-colors","tap"));check(card(data,"a").optString("priority").equals("1"),"Single tap rule executes");
+        before=BoardTemplate.copy(data);long count=data.getJSONArray("automations").getJSONObject(0).getLong("runCount");AutomationEngine.run(data,before,NOW+3,"device");check(data.getJSONArray("automations").getJSONObject(0).getLong("runCount")==count,"Save/refresh never replays button event");
+        data=fixture();JSONObject rule=data.getJSONArray("automations").getJSONObject(0);rule.put("buttonSource","board");before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW,"device",new BoardButtons.Event("board","item","a","reset-colors","tap"));check(card(data,"a").has("automationColor"),"Button location filter enforced");
+        rule.put("buttonSource","any").getJSONArray("conditions").put(new JSONObject().put("field","title").put("op","eq").put("value","b"));before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW,"device",new BoardButtons.Event("board","board","board","reset-colors","tap"));check(card(data,"a").has("automationColor")&&!card(data,"b").has("automationColor"),"Conditions narrow board-wide target set");
+        data=fixture();data.getJSONArray("automations").getJSONObject(0).put("boardId","other");before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW,"device",new BoardButtons.Event("board","board","board","reset-colors","tap"));check(card(data,"a").has("automationColor"),"Rule board scope remains enforced");
+        boolean rejected=false;try{AutomationEngine.run(data,before,NOW,"device",new BoardButtons.Event("board","board","board","deleted","tap"));}catch(JSONException e){rejected=true;}check(rejected,"Stale/deleted button events rejected");
+        rejected=false;try{BoardButtons.validate(new JSONArray().put(button()).put(button()));}catch(JSONException e){rejected=true;}check(rejected,"Duplicate owner IDs rejected");check(BoardButtons.validId("reset_colors.1")&&!BoardButtons.validId("bad id"),"Configurable IDs validated");
+        BoardButtons.validateData(fixture());JSONObject restored=new JSONObject(fixture().toString());check(BoardButtons.exists(restored,new BoardButtons.Event("board","column","one","reset-colors","tap")),"Buttons survive serialization");
+        JSONObject board=fixture().getJSONArray("boards").getJSONObject(0);JSONObject template=BoardTemplate.fromLegacy(new JSONArray().put("One").put("Two"),new String[]{"#6366f1","#0d9488"});JSONArray migrated=BoardTemplate.migrate(board,template);check(migrated.getJSONObject(0).getJSONArray("buttons").getJSONObject(0).getString("id").equals("reset-colors"),"Default-layout migration retains matching-column buttons");
+        data=fixture();data.getJSONArray("automations").put(0,rule("buttonTap","reminder","1"));before=BoardTemplate.copy(data);BoardButtons.Event event=new BoardButtons.Event("board","item","a","reset-colors","tap");AutomationEngine.run(data,before,NOW,"device",event);before=BoardTemplate.copy(data);AutomationEngine.run(data,before,NOW+1,"device",event);check(card(data,"a").getJSONArray("reminders").length()==2,"Separate deliberate button presses can repeat actions");
+        System.out.println("Button scope, gestures, conditions, repeat/no-replay, ID validation and persistence tests passed.");
+    }
+}

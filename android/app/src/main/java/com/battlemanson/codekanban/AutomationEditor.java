@@ -12,12 +12,12 @@ import java.util.function.Consumer;
 
 /** Native rule builder: repeatable conditions and actions, without requiring JSON editing. */
 final class AutomationEditor {
-    private static final String[] TRIGGER_LABELS={"Work item created","Work item updated","Work item moved to a column","Conditions become true (including age)"};
+    private static final String[] TRIGGER_LABELS={"Work item created","Work item updated","Work item moved to a column","Conditions become true (including age)","Button tapped","Button double-tapped","Button long-pressed"};
     private static final String[] FIELD_LABELS={"Column name","Previous column name","Item age (hours)","Column age (hours)","Title","Description","Labels","Priority","Story points","Difficulty","Due date overdue (true/false)","All tasks complete (true/false)"};
     private static final String[] OP_LABELS={"Equals","Does not equal","Contains","At least","At most"};
     private static final String[] ACTION_LABELS={"Set card accent color","Clear card accent color","Complete all tasks","Reopen all tasks","Add reminder after minutes","Add label","Set priority","Set story points","Set difficulty"};
     private final Activity activity;private final JSONObject data,rule;private final int ink,muted;private final Consumer<JSONObject> saved;
-    private LinearLayout conditions,actions;private EditText name;private Spinner scope,trigger,match;private CheckBox enabled;
+    private LinearLayout conditions,actions;private EditText name,buttonId;private Spinner scope,trigger,match,buttonSource;private CheckBox enabled;
     private final ArrayList<String> boardIds=new ArrayList<>();
     private AutomationEditor(Activity activity,JSONObject data,JSONObject rule,int ink,int muted,Consumer<JSONObject> saved){this.activity=activity;this.data=data;this.rule=rule;this.ink=ink;this.muted=muted;this.saved=saved;}
     static void show(Activity activity,JSONObject data,JSONObject source,int ink,int muted,Consumer<JSONObject> saved){
@@ -41,6 +41,12 @@ final class AutomationEditor {
         String selectedScope=rule.optString("boardId");if(!boardIds.contains(selectedScope)){boards.add("Unavailable board (choose another)");boardIds.add(selectedScope);}
         scope=spinner(form,boards.toArray(new String[0]),boardIds.indexOf(selectedScope));
         label(form,"When");trigger=spinner(form,TRIGGER_LABELS,index(AutomationEngine.TRIGGERS,rule.optString("trigger")));
+        LinearLayout buttonOptions=vertical();form.addView(buttonOptions);label(buttonOptions,"Button ID to match");buttonId=input(buttonOptions,rule.optString("buttonId"),"e.g. reset-colors");
+        label(buttonOptions,"Button location");buttonSource=spinner(buttonOptions,new String[]{"Any location","Board","Column","Work item"},index(BoardButtons.SOURCES,rule.optString("buttonSource","any")));
+        button(buttonOptions,"Choose an existing button",()->chooseButton());
+        buttonOptions.addView(text("Board buttons target all items directly in that board. Column buttons target items in that column. Work-item buttons target that item only. Conditions narrow that set. IDs match exactly, including letter case.",13,muted));
+        buttonOptions.setVisibility(rule.optString("trigger").startsWith("button")?View.VISIBLE:View.GONE);
+        trigger.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){}public void onItemSelected(android.widget.AdapterView<?> p,View v,int n,long id){buttonOptions.setVisibility(AutomationEngine.TRIGGERS[n].startsWith("button")?View.VISIBLE:View.GONE);}});
         form.addView(text("Age rules are checked on saves, on opening the app and every minute while visible. Existing items start aging when this feature is first installed. Actions run in list order; they do not recursively trigger other rules.",13,muted));
         label(form,"Conditions");match=spinner(form,new String[]{"All conditions must match","Any condition may match"},rule.optString("match","all").equals("any")?1:0);
         conditions=vertical();form.addView(conditions);button(form,"+ Add condition",()->condition(null,-1));
@@ -48,9 +54,20 @@ final class AutomationEditor {
         form.addView(text("Column names match exactly, ignoring letter case. Board scope applies to that board only. Colors add an accent border. Automated reminders use normal notifications on the device running the automation; configure full-screen alarms in the work item afterwards.",13,muted));
         render();AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("Automation").setView(scroll).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();
         dialog.setOnShowListener(d->{dialog.getWindow().setLayout(activity.getResources().getDisplayMetrics().widthPixels-dp(24),activity.getResources().getDisplayMetrics().heightPixels-dp(72));dialog.getButton(-1).setOnClickListener(v->{try{
-            rule.put("name",name.getText().toString().trim()).put("enabled",enabled.isChecked()).put("boardId",boardIds.get(scope.getSelectedItemPosition())).put("trigger",AutomationEngine.TRIGGERS[trigger.getSelectedItemPosition()]).put("match",match.getSelectedItemPosition()==1?"any":"all");AutomationEngine.validate(rule);saved.accept(rule);dialog.dismiss();
+            rule.put("name",name.getText().toString().trim()).put("enabled",enabled.isChecked()).put("boardId",boardIds.get(scope.getSelectedItemPosition())).put("trigger",AutomationEngine.TRIGGERS[trigger.getSelectedItemPosition()]).put("match",match.getSelectedItemPosition()==1?"any":"all");if(rule.optString("trigger").startsWith("button"))rule.put("buttonId",buttonId.getText().toString().trim()).put("buttonSource",BoardButtons.SOURCES[buttonSource.getSelectedItemPosition()]);AutomationEngine.validate(rule);saved.accept(rule);dialog.dismiss();
         }catch(Exception e){new AlertDialog.Builder(activity).setTitle("Check automation").setMessage(e.getMessage()).setPositiveButton("OK",null).show();}});});dialog.show();
     }
+    private void chooseButton(){
+        try{ArrayList<String> names=new ArrayList<>(),ids=new ArrayList<>(),sources=new ArrayList<>();JSONArray boards=data.getJSONArray("boards");String selected=boardIds.get(scope.getSelectedItemPosition());
+            for(int b=0;b<boards.length();b++){JSONObject board=boards.getJSONObject(b);if(!selected.isEmpty()&&!selected.equals(board.optString("id")))continue;
+                addButtons(board,boardPath(board)+" · Board","board",names,ids,sources);JSONArray columns=board.getJSONArray("columns");for(int c=0;c<columns.length();c++)addButtons(columns.getJSONObject(c),boardPath(board)+" · "+columns.getJSONObject(c).optString("name"),"column",names,ids,sources);
+                for(WorkItemRelations.Entry entry:WorkItemRelations.entries(board))addButtons(entry.card,boardPath(board)+" · "+entry.card.optString("title"),"item",names,ids,sources);
+            }
+            if(names.isEmpty()){new AlertDialog.Builder(activity).setMessage("Create a board, column or work-item button first, or enter its ID here.").setPositiveButton("OK",null).show();return;}
+            new AlertDialog.Builder(activity).setTitle("Choose button ID and location").setItems(names.toArray(new String[0]),(d,n)->{buttonId.setText(ids.get(n));buttonSource.setSelection(index(BoardButtons.SOURCES,sources.get(n)));}).setNegativeButton("Cancel",null).show();
+        }catch(JSONException e){new AlertDialog.Builder(activity).setMessage(e.getMessage()).setPositiveButton("OK",null).show();}
+    }
+    private void addButtons(JSONObject owner,String location,String source,List<String> names,List<String> ids,List<String> sources)throws JSONException{JSONArray buttons=owner.optJSONArray("buttons");if(buttons==null)return;for(int i=0;i<buttons.length();i++){JSONObject b=buttons.getJSONObject(i);names.add(b.optString("label")+" ["+b.optString("id")+"] · "+location);ids.add(b.optString("id"));sources.add(source);}}
     private void render(){try{
         conditions.removeAllViews();JSONArray cs=rule.getJSONArray("conditions");if(cs.length()==0)conditions.addView(text("No conditions: match every work item in scope.",14,muted));
         for(int i=0;i<cs.length();i++){final int n=i;JSONObject c=cs.getJSONObject(i);TextView row=text(FIELD_LABELS[index(AutomationEngine.FIELDS,c.optString("field"))]+" "+OP_LABELS[index(AutomationEngine.OPS,c.optString("op"))].toLowerCase(Locale.ROOT)+" "+c.optString("value"),15,ink);conditions.addView(row);row.setOnClickListener(v->condition(c,n));}
