@@ -41,6 +41,7 @@ final class BackupStore {
         }
         if(data.has("defaultTemplate"))BoardTemplate.validate(data.getJSONObject("defaultTemplate"));
         if(data.has("defaults"))data.getJSONArray("defaults");
+        if(data.has("automations")){JSONArray rules=data.getJSONArray("automations");for(int i=0;i<rules.length();i++)AutomationEngine.validate(rules.getJSONObject(i));}
         return backup;
     }
     static void write(ContentResolver resolver,Uri tree,String json) throws IOException {

@@ -26,6 +26,8 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private int INK, MUTED, ACCENT, BG, SURFACE, BORDER; private boolean dark;
+    private JSONObject automationBaseline;private boolean suppressAutomationOnce;
+    private final Runnable automationTick=new Runnable(){@Override public void run(){if(hasWindowFocus())evaluateAutomations();updateHandler.postDelayed(this,60_000);}};
     private JSONObject data; private String current="", tab="boards"; private LinearLayout root, content; private ScrollView boardScroll;
     private boolean skipNextUpdateCheck, defaultColumnsExpanded, updatesExpanded, backupExpanded;
     private final android.os.Handler updateHandler=new android.os.Handler(android.os.Looper.getMainLooper());
@@ -67,10 +69,10 @@ public class MainActivity extends Activity {
         if(!dark&&android.os.Build.VERSION.SDK_INT>=35)systemUi|=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         getWindow().getDecorView().setSystemUiVisibility(systemUi);
         skipNextUpdateCheck=getIntent()!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(getIntent().getAction());
-        load();migrateLegacyReminders();if(data!=null)try{if(ReminderSubscriptions.prepare(this,data,false))save();}catch(JSONException e){error("Could not initialize reminder subscriptions",e.getMessage());}if(getIntent().getBooleanExtra("settingsOpen",false)){tab="settings";getIntent().removeExtra("settingsOpen");}show();openReminder(getIntent());
+        load();if(data!=null)try{automationBaseline=BoardTemplate.copy(data);}catch(JSONException e){error("Could not initialize automations",e.getMessage());}migrateLegacyReminders();if(data!=null)try{if(ReminderSubscriptions.prepare(this,data,false))save();}catch(JSONException e){error("Could not initialize reminder subscriptions",e.getMessage());}if(getIntent().getBooleanExtra("settingsOpen",false)){tab="settings";getIntent().removeExtra("settingsOpen");}show();openReminder(getIntent());
     }
-    @Override protected void onResume(){super.onResume();UpdateManager.attach(this);updateHandler.removeCallbacks(betaUpdateCheck);updateHandler.postDelayed(betaUpdateCheck,UpdatePolling.INTERVAL);syncReminders();UpdateManager updates=new UpdateManager(this);boolean pending=updates.resumePending();if(skipNextUpdateCheck)skipNextUpdateCheck=false;else if(!pending&&data!=null)updates.checkOnResume();}
-    @Override protected void onStop(){updateHandler.removeCallbacks(betaUpdateCheck);UpdateManager.detach(this);super.onStop();}
+    @Override protected void onResume(){super.onResume();UpdateManager.attach(this);updateHandler.removeCallbacks(betaUpdateCheck);updateHandler.postDelayed(betaUpdateCheck,UpdatePolling.INTERVAL);updateHandler.removeCallbacks(automationTick);updateHandler.postDelayed(automationTick,60_000);evaluateAutomations();syncReminders();UpdateManager updates=new UpdateManager(this);boolean pending=updates.resumePending();if(skipNextUpdateCheck)skipNextUpdateCheck=false;else if(!pending&&data!=null)updates.checkOnResume();}
+    @Override protected void onStop(){updateHandler.removeCallbacks(automationTick);updateHandler.removeCallbacks(betaUpdateCheck);UpdateManager.detach(this);super.onStop();}
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){super.onRequestPermissionsResult(requestCode,permissions,grantResults);if(requestCode==2001)syncReminders();}
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(intent!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction()))skipNextUpdateCheck=true;openReminder(intent);}
     private void openReminder(Intent intent){if(intent!=null&&ReminderSubscriptions.OPEN.equals(intent.getAction())){tab="reminders";show();intent.setAction(null);return;}if(intent==null||!"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction())||data==null)return;String boardId=intent.getStringExtra("boardId"),id=intent.getStringExtra("cardId");if(boardId!=null&&id!=null){JSONObject b=find(array(data,"boards"),boardId);if(b!=null)revealCard(b,id);}intent.setAction(null);}
@@ -85,7 +87,22 @@ public class MainActivity extends Activity {
         if(data==null)return;boolean changed=false;
         try{JSONArray boards=data.optJSONArray("boards");if(boards==null)return;for(int b=0;b<boards.length();b++){JSONObject board=boards.optJSONObject(b);if(board==null)continue;JSONArray cols=board.optJSONArray("columns");if(cols==null)continue;for(int c=0;c<cols.length();c++){JSONObject col=cols.optJSONObject(c);JSONArray cards=col==null?null:col.optJSONArray("cards");if(cards==null)continue;for(int i=0;i<cards.length();i++){JSONObject card=cards.optJSONObject(i),template=card==null?null:card.optJSONObject("templateData");JSONArray old=template==null?null:template.optJSONArray("reminders");if(card==null||card.has("reminders")||old==null)continue;JSONArray copied=new JSONArray(old.toString());for(int j=0;j<copied.length();j++)copied.getJSONObject(j).put("id",id());card.put("reminders",copied);changed=true;}}}if(changed)save();}catch(JSONException e){android.util.Log.e("CodeKanbanReminder","Could not migrate template reminders",e);}
     }
-    private boolean save(){try{ReminderSubscriptions.prepare(this,data,false);}catch(JSONException e){error("Could not prepare reminders",e.getMessage());return false;}android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;try{out=file.startWrite();out.write(data.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}queueBackup();syncReminders();return true;}
+    private boolean save(){
+        android.util.AtomicFile file=new android.util.AtomicFile(new File(getFilesDir(),"boards.json"));FileOutputStream out=null;
+        try{JSONObject draft=BoardTemplate.copy(data);long now=System.currentTimeMillis();
+            if(suppressAutomationOnce){AutomationEngine.initialize(draft,now);suppressAutomationOnce=false;}else AutomationEngine.run(draft,automationBaseline==null?BoardTemplate.copy(data):automationBaseline,now,ReminderSubscriptions.device(this));
+            ReminderSubscriptions.prepare(this,draft,false);JSONObject baseline=BoardTemplate.copy(draft);
+            out=file.startWrite();out.write(draft.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);out=null;
+            AutomationEngine.adopt(data,draft);automationBaseline=baseline;
+        }catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}
+        queueBackup();syncReminders();return true;
+    }
+    private void evaluateAutomations(){
+        if(data==null||automationBaseline==null)return;
+        try{JSONObject draft=BoardTemplate.copy(data);if(AutomationEngine.run(draft,automationBaseline,System.currentTimeMillis(),ReminderSubscriptions.device(this))&&save())show();}
+        catch(Exception e){android.util.Log.e("CodeKanbanAutomation","Could not evaluate automations",e);}
+    }
+    private Drawable workItemBackground(JSONObject card,int stroke){String color=card.optString("automationColor");int fill=BG;if(!color.isEmpty()){int accent=parseColor(color);float blend=dark?.18f:.10f;fill=Color.rgb(Math.round(Color.red(BG)*(1-blend)+Color.red(accent)*blend),Math.round(Color.green(BG)*(1-blend)+Color.green(accent)*blend),Math.round(Color.blue(BG)*(1-blend)+Color.blue(accent)*blend));}return shape(fill,stroke!=0?stroke:color.isEmpty()?0:parseColor(color));}
     private GradientDrawable shape(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(16));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
     private Drawable columnBackground(JSONObject column,boolean highlighted){return roundedAccentBackground(parseColor(column.optString("color")),highlighted);}
     private Drawable roundedAccentBackground(int color,boolean highlighted){
@@ -128,12 +145,12 @@ public class MainActivity extends Activity {
         LinearLayout brandRow=new LinearLayout(this);brandRow.setGravity(Gravity.CENTER_VERTICAL);header.addView(brandRow);
         TextView brand=text("CODE KANBAN",12,ACCENT,true);brandRow.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
         if("beta".equals(getSharedPreferences("app_updates",MODE_PRIVATE).getString("channel","stable"))){TextView build=text("Build "+BuildConfig.VERSION_CODE,12,MUTED,false);build.setGravity(Gravity.RIGHT);brandRow.addView(build);}
-        String title=tab.equals("boards")?(board()==null?"Your boards":board().optString("name")):tab.equals("all")?"Across boards":tab.equals("reminders")?"Reminders":"Settings";
-        LinearLayout titleRow=new LinearLayout(this);titleRow.setGravity(Gravity.CENTER_VERTICAL);header.addView(titleRow);if(tab.equals("boards")&&board()!=null){TextView icon=boardIcon(board(),22);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(36),dp(36));p.rightMargin=dp(10);titleRow.addView(icon,p);}TextView h=text(title,27,INK,true);titleRow.addView(h,new LinearLayout.LayoutParams(0,-2,1));TextView sub=text(tab.equals("boards")?(board()==null?"Organize work, your way":"Board · "+path(board())):tab.equals("all")?"Work items from every board":tab.equals("reminders")?"Manage alerts on this device":"Appearance, templates, updates and backups",13,MUTED,false);header.addView(sub);
+        String title=tab.equals("boards")?(board()==null?"Your boards":board().optString("name")):tab.equals("all")?"Across boards":tab.equals("reminders")?"Reminders":tab.equals("automations")?"Automations":"Settings";
+        LinearLayout titleRow=new LinearLayout(this);titleRow.setGravity(Gravity.CENTER_VERTICAL);header.addView(titleRow);if(tab.equals("boards")&&board()!=null){TextView icon=boardIcon(board(),22);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(36),dp(36));p.rightMargin=dp(10);titleRow.addView(icon,p);}TextView h=text(title,27,INK,true);titleRow.addView(h,new LinearLayout.LayoutParams(0,-2,1));TextView sub=text(tab.equals("boards")?(board()==null?"Organize work, your way":"Board · "+path(board())):tab.equals("all")?"Work items from every board":tab.equals("reminders")?"Manage alerts on this device":tab.equals("automations")?"Rules for your boards and work items":"Appearance, templates, updates and backups",13,MUTED,false);header.addView(sub);
         HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);LinearLayout nav=new LinearLayout(this);scroll.addView(nav);header.addView(scroll);
-        nav.addView(action("Boards",()->{if(tab.equals("boards"))current="";tab="boards";show();}));nav.addView(action("All work",()->{tab="all";show();}));nav.addView(action("Reminders",()->{tab="reminders";show();}));nav.addView(action("Settings",()->{tab="settings";show();}));
+        nav.addView(action("Boards",()->{if(tab.equals("boards"))current="";tab="boards";show();}));nav.addView(action("All work",()->{tab="all";show();}));nav.addView(action("Reminders",()->{tab="reminders";show();}));nav.addView(action("Automations",()->{tab="automations";show();}));nav.addView(action("Settings",()->{tab="settings";show();}));
         ScrollView sv=new ScrollView(this);boardScroll=sv;sv.setFillViewport(true);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));content=vertical();content.setPadding(dp(16),dp(16),dp(16),dp(28));sv.addView(content);
-        if(tab.equals("settings"))settings();else if(tab.equals("all"))all();else if(tab.equals("reminders"))remindersView();else if(board()==null)boards();else boardView();
+        if(tab.equals("settings"))settings();else if(tab.equals("all"))all();else if(tab.equals("reminders"))remindersView();else if(tab.equals("automations"))automationsView();else if(board()==null)boards();else boardView();
     }
     private String path(JSONObject b){ArrayList<String> parts=new ArrayList<>();HashSet<String> seen=new HashSet<>();while(b!=null&&seen.add(b.optString("id"))){parts.add(b.optString("name"));b=find(array(data,"boards"),b.optString("parent"));}Collections.reverse(parts);return android.text.TextUtils.join(" / ",parts);}
     private void section(String s){TextView t=text(s,18,INK,true);t.setPadding(dp(4),dp(18),dp(4),dp(10));content.addView(t);}
@@ -196,7 +213,7 @@ public class MainActivity extends Activity {
         JSONArray cards=array(c,"cards");for(int i=0;i<cards.length();i++){JSONObject card=at(cards,i);LinearLayout cardView=boardCard(b,c,card);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(7);body.addView(cardView,p);cardViews.put(card.optString("id"),cardView);}body.addView(action("+ Add work item",()->input("New work item","Title","",name->{JSONObject card=put(put(put(obj(),"id",id()),"title",name),"tasks",arr());put(card,"comments",arr());cards.put(card);save();show();})));
     }
     private LinearLayout boardCard(JSONObject board,JSONObject column,JSONObject card){
-        LinearLayout view=vertical();view.setPadding(dp(12),dp(12),dp(12),dp(12));view.setBackground(shape(BG,0));
+        LinearLayout view=vertical();view.setPadding(dp(12),dp(12),dp(12),dp(12));view.setBackground(workItemBackground(card,0));
         TextView title=text(card.optString("title"),16,INK,true);view.addView(title);
         String description=card.optString("description","").split("\\n",-1)[0].trim();if(!description.isEmpty()){TextView snippet=text(description,14,MUTED,false);snippet.setMaxLines(2);snippet.setEllipsize(android.text.TextUtils.TruncateAt.END);snippet.setPadding(0,dp(5),0,0);view.addView(snippet);}
         String labels=card.optString("labels","").trim();if(!labels.isEmpty()){TextView tags=text("Labels  "+labels,13,ACCENT,true);tags.setPadding(0,dp(7),0,0);view.addView(tags);}
@@ -233,7 +250,7 @@ public class MainActivity extends Activity {
     private void revealCard(JSONObject board,String id){
         try{WorkItemRelations.Entry entry=WorkItemRelations.find(board,id);if(entry==null){Toast.makeText(this,"Work item not found",Toast.LENGTH_SHORT).show();return;}if(entry.column.optBoolean("collapsed")){put(entry.column,"collapsed",false);if(!save()){put(entry.column,"collapsed",true);return;}}
             current=board.optString("id");tab="boards";show();View target=cardViews.get(id);if(target==null)return;ScrollView scroll=boardScroll;
-            target.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener(){@Override public void onGlobalLayout(){target.getViewTreeObserver().removeOnGlobalLayoutListener(this);if(scroll!=boardScroll||!target.isAttachedToWindow())return;Rect bounds=new Rect();target.getDrawingRect(bounds);scroll.offsetDescendantRectToMyCoords(target,bounds);scroll.smoothScrollTo(0,Math.max(0,bounds.top-dp(12)));target.setBackground(shape(BG,ACCENT));target.announceForAccessibility("Work item "+entry.card.optString("title"));target.postDelayed(()->target.setBackground(shape(BG,0)),1200);}});target.requestLayout();
+            target.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener(){@Override public void onGlobalLayout(){target.getViewTreeObserver().removeOnGlobalLayoutListener(this);if(scroll!=boardScroll||!target.isAttachedToWindow())return;Rect bounds=new Rect();target.getDrawingRect(bounds);scroll.offsetDescendantRectToMyCoords(target,bounds);scroll.smoothScrollTo(0,Math.max(0,bounds.top-dp(12)));target.setBackground(shape(BG,ACCENT));target.announceForAccessibility("Work item "+entry.card.optString("title"));target.postDelayed(()->target.setBackground(workItemBackground(entry.card,0)),1200);}});target.requestLayout();
         }catch(JSONException e){error("Could not find work item",e.getMessage());}
     }
     private int parseColor(String s){try{return Color.parseColor(s);}catch(Exception e){return ACCENT;}}
@@ -359,7 +376,7 @@ public class MainActivity extends Activity {
         if(request==PICK_BACKUP_FOLDER){try{int flags=resultData.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);if((flags&Intent.FLAG_GRANT_WRITE_URI_PERMISSION)==0)throw new SecurityException("The folder did not grant write access.");getContentResolver().takePersistableUriPermission(uri,flags);getPreferences(MODE_PRIVATE).edit().putString("backupTree",uri.toString()).putString("backupStatus","Backup in progress…").apply();show();queueBackup();}catch(Exception e){error("Could not connect folder",e.getMessage());}}
         else if(request==PICK_RESTORE_FILE){BACKUPS.execute(()->{try{JSONObject backup=BackupStore.validate(BackupStore.read(getContentResolver(),uri));runOnUiThread(()->{if(isFinishing()||isDestroyed())return;new AlertDialog.Builder(this).setTitle("Restore this backup?").setMessage("This replaces all current boards, work items, defaults, and theme with the selected snapshot. Make a backup of the current data first if you need it.").setNegativeButton("Cancel",null).setPositiveButton("Restore",(d,w)->restoreBackup(backup)).show();});}catch(Exception e){runOnUiThread(()->{if(!isFinishing()&&!isDestroyed())error("Could not restore backup",e.getMessage());});}});}
     }
-    private void restoreBackup(JSONObject backup){try{JSONObject previous=data;String previousTheme=themeMode();data=BoardTemplate.copy(backup.getJSONObject("data"));ReminderSubscriptions.prepare(this,data,true);getPreferences(MODE_PRIVATE).edit().putString("themeMode",backup.optString("themeMode",backup.getBoolean("darkMode")?"dark":"light")).apply();if(save()){current="";tab="boards";recreate();}else{data=previous;getPreferences(MODE_PRIVATE).edit().putString("themeMode",previousTheme).apply();}}catch(JSONException e){error("Could not restore backup",e.getMessage());}}
+    private void restoreBackup(JSONObject backup){try{JSONObject previous=data;String previousTheme=themeMode();data=BoardTemplate.copy(backup.getJSONObject("data"));ReminderSubscriptions.prepare(this,data,true);suppressAutomationOnce=true;getPreferences(MODE_PRIVATE).edit().putString("themeMode",backup.optString("themeMode",backup.getBoolean("darkMode")?"dark":"light")).apply();if(save()){current="";tab="boards";recreate();}else{data=previous;getPreferences(MODE_PRIVATE).edit().putString("themeMode",previousTheme).apply();}}catch(JSONException e){error("Could not restore backup",e.getMessage());}}
     private void settings(){
         section("Appearance");
         Spinner theme=new Spinner(this);theme.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Light Mode","Dark Mode","Follow Device"}));
@@ -435,6 +452,31 @@ public class MainActivity extends Activity {
         return true;
     }
     private String soundTitle(Uri uri){try{android.media.Ringtone ringtone=android.media.RingtoneManager.getRingtone(this,uri);return ringtone==null?"Default alarm sound":ringtone.getTitle(this);}catch(Exception e){return "Selected alarm sound";}}
+    private void automationsView(){
+        empty("Choose a trigger, optional conditions, and one or more actions. Rules run top to bottom; the last color action that runs wins. Age rules run while the app is visible and when it opens, not continuously in the background.");
+        button("+ Create automation",()->AutomationEditor.show(this,data,null,INK,MUTED,this::saveAutomation));
+        button("Check conditions now",()->{evaluateAutomations();Toast.makeText(this,"Conditions checked. Event rules run when you create, edit or move work items.",Toast.LENGTH_LONG).show();});
+        JSONArray rules=array(data,"automations");if(rules.length()==0)empty("No automations yet. Try: when moved to Done → complete all tasks; or age at least 168 hours → red card accent.");
+        for(int i=0;i<rules.length();i++){JSONObject rule=at(rules,i);if(rule==null)continue;LinearLayout row=tile();LinearLayout heading=new LinearLayout(this);heading.setGravity(Gravity.CENTER_VERTICAL);row.addView(heading);
+            TextView title=text(rule.optString("name"),17,INK,true);heading.addView(title,new LinearLayout.LayoutParams(0,-2,1));Switch enabled=new Switch(this);enabled.setContentDescription("Enable "+rule.optString("name"));enabled.setChecked(rule.optBoolean("enabled",true));heading.addView(enabled);
+            enabled.setOnCheckedChangeListener((v,on)->{put(rule,"enabled",on);if(!save())put(rule,"enabled",!on);show();});
+            String scope=rule.optString("boardId");JSONObject board=find(array(data,"boards"),scope);row.addView(text((scope.isEmpty()?"All boards":board==null?"Unavailable board":path(board))+" · "+rule.optString("trigger")+" · "+array(rule,"conditions").length()+" conditions · "+array(rule,"actions").length()+" actions",13,MUTED,false));
+            if(rule.has("lastRunAt"))row.addView(text("Last run: "+localDateTime(rule.optLong("lastRunAt"))+" · "+rule.optLong("runCount")+" item runs",13,MUTED,false));if(rule.has("error"))row.addView(text(rule.optString("error"),13,Color.rgb(239,68,68),false));
+            row.setOnClickListener(v->AutomationEditor.show(this,data,rule,INK,MUTED,this::saveAutomation));
+            row.setOnLongClickListener(v->{new AlertDialog.Builder(this).setTitle(rule.optString("name")).setItems(new String[]{"Edit","Move up","Move down","Delete"},(d,choice)->{
+                if(choice==0)AutomationEditor.show(this,data,rule,INK,MUTED,this::saveAutomation);
+                else if(choice==3)new AlertDialog.Builder(this).setTitle("Delete automation?").setMessage("This stops future runs. Previously applied colors, task changes and reminders remain.").setNegativeButton("Cancel",null).setPositiveButton("Delete",(x,w)->mutateAutomations(rule.optString("id"),-1)).show();
+                else mutateAutomations(rule.optString("id"),choice==1?-2:1);
+            }).show();return true;});
+        }
+    }
+    private void saveAutomation(JSONObject rule){
+        JSONObject previous=data;try{JSONObject draft=BoardTemplate.copy(data);JSONArray rules=array(draft,"automations");boolean replaced=false;
+            for(int i=0;i<rules.length();i++)if(rule.optString("id").equals(at(rules,i).optString("id"))){rules.put(i,rule);replaced=true;break;}if(!replaced)rules.put(rule);
+            JSONObject state=draft.optJSONObject("automationState");if(state!=null)state.remove(rule.optString("id"));data=draft;if(!save()){data=previous;throw new IllegalStateException("Automation could not be saved.");}show();for(int i=0;i<rule.getJSONArray("actions").length();i++)if(rule.getJSONArray("actions").getJSONObject(i).optString("type").equals("reminder")&&!ReminderScheduler.notificationsAllowed(this)){notificationAccess();break;}
+        }catch(JSONException e){data=previous;error("Could not save automation",e.getMessage());}
+    }
+    private void mutateAutomations(String id,int direction){JSONObject previous=data;try{data=BoardTemplate.copy(data);JSONArray rules=array(data,"automations");for(int i=0;i<rules.length();i++)if(id.equals(at(rules,i).optString("id"))){if(direction==-1)rules.remove(i);else{int destination=i+(direction==-2?-1:1);if(destination>=0&&destination<rules.length()){Object other=rules.get(destination);rules.put(destination,rules.get(i));rules.put(i,other);}}break;}if(!save())data=previous;show();}catch(JSONException e){data=previous;error("Could not change automation",e.getMessage());}}
     private void remindersView(){
         empty("Green: alerts enabled on this device. Red: alerts disabled on this device. Subscribing here does not change another device's alerts. Past reminders may alert immediately when enabled.");
         EditText search=new EditText(this);search.setSingleLine();search.setHint("Search reminders and work items");content.addView(search);
