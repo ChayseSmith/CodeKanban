@@ -333,6 +333,11 @@ public class MainActivity extends Activity {
     }
     private void restoreBackup(JSONObject backup){try{JSONObject previous=data;boolean previousDark=getPreferences(MODE_PRIVATE).getBoolean("dark",true);data=backup.getJSONObject("data");getPreferences(MODE_PRIVATE).edit().putBoolean("dark",backup.getBoolean("darkMode")).apply();if(save()){current="";tab="boards";recreate();}else{data=previous;getPreferences(MODE_PRIVATE).edit().putBoolean("dark",previousDark).apply();}}catch(JSONException e){error("Could not restore backup",e.getMessage());}}
     private void defaults(){
+        TextView channelLabel=text("Release channel",16,INK,true);content.addView(channelLabel);
+        Spinner channel=new Spinner(this);channel.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Stable","Beta"}));
+        channel.setSelection("beta".equals(getSharedPreferences("app_updates",MODE_PRIVATE).getString("channel","stable"))?1:0);content.addView(channel);
+        channel.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){String selected=position==1?"beta":"stable";String previous=getSharedPreferences("app_updates",MODE_PRIVATE).getString("channel","stable");if(!selected.equals(previous)){getSharedPreferences("app_updates",MODE_PRIVATE).edit().putString("channel",selected).apply();new UpdateManager(MainActivity.this).check(true);}}});
+
         Switch theme=new Switch(this);theme.setText("Dark mode");theme.setTextColor(INK);theme.setChecked(dark);theme.setOnCheckedChangeListener((v,on)->{getPreferences(MODE_PRIVATE).edit().putBoolean("dark",on).apply();if(save())recreate();else getPreferences(MODE_PRIVATE).edit().putBoolean("dark",dark).apply();});content.addView(theme);
         empty("New boards copy this template. Existing boards are compared when opened. Changes here do not alter existing boards.");
         try{JSONObject t=template();JSONArray lists=t.getJSONArray("lists");section("Default columns");

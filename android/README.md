@@ -78,3 +78,9 @@ These extension capabilities are not yet implemented in the Android app:
 The Android storage format is private and is not currently the extension's `.kanban` format. Feature names shared with the extension do not imply full behavioral parity.
 
 The board picker bundles [Material Design Icons](https://github.com/Templarian/MaterialDesign-Webfont) version 7.4.47. Its font, icon-name index, and license notices are in `app/src/main/assets/mdi/`.
+
+## Release channels
+
+Choose **Defaults → Release channel → Stable or Beta**. Stable is the initial setting. The preference persists across app restarts and updates. Each channel has a separate public update feed (`android-stable` or `android-beta` release assets); versioned APK releases remain independently available. All non-default branch pushes publish beta releases, and pushes to the default branch (including merges) publish stable releases. Manual runs use the selected branch to determine the channel. Beta releases are marked as prereleases.
+
+Channel switches never downgrade an installed APK. If the installed beta version is newer than stable, wait for stable to publish a higher version code. The shared signing secrets and version base must remain consistent. The first release using this workflow must populate each channel feed before users can check that channel. Older app versions continue using GitHub's latest stable release. Channel feed releases use replaceable assets, so do not enable release immutability for those feed releases. The channel preference is local app configuration and is not yet part of exported board snapshots.

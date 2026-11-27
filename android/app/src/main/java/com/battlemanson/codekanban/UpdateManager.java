@@ -34,19 +34,26 @@ final class UpdateManager {
             if(status!=200){c.disconnect();throw new IOException("GitHub returned HTTP "+status+". Check that the repository and release are public.");}String type=c.getContentType();if(type!=null&&type.toLowerCase(Locale.ROOT).contains("text/html")){c.disconnect();throw new IOException("The update source returned a web page instead of a release.");}return c;}
         throw new IOException("Too many update redirects.");
     }
+    private String channelUrl(){
+        String channel=activity.getSharedPreferences("app_updates",Activity.MODE_PRIVATE).getString("channel","stable");
+        if(!"beta".equals(channel))channel="stable";
+        return BuildConfig.UPDATE_MANIFEST_URL.replace("/releases/latest/download/", "/releases/download/android-"+channel+"/");
+    }
     void check(boolean manual){
         if(BuildConfig.UPDATE_MANIFEST_URL.isEmpty()){if(manual)message("Updates unavailable","Install an APK built by the GitHub release workflow to enable update checks.");else Toast.makeText(activity,"Updates unavailable in this build",Toast.LENGTH_LONG).show();return;}
         checkTarget=new WeakReference<>(activity);if(manual)MANUAL_REQUESTED.set(true);
         if(!CHECKING.compareAndSet(false,true)){if(manual)Toast.makeText(activity,"Already checking for updates",Toast.LENGTH_SHORT).show();return;}
         if(manual)Toast.makeText(activity,"Checking for updates…",Toast.LENGTH_SHORT).show();
+        final String requestedUrl=channelUrl();
         new Thread(()->{try{
-            HttpURLConnection c=connect(BuildConfig.UPDATE_MANIFEST_URL,"application/json");ByteArrayOutputStream bytes=new ByteArrayOutputStream();try(InputStream in=c.getInputStream()){byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1){if(bytes.size()+n>65536)throw new IOException("Update metadata is too large.");bytes.write(buffer,0,n);}}finally{c.disconnect();}
+            HttpURLConnection c=connect(requestedUrl,"application/json");ByteArrayOutputStream bytes=new ByteArrayOutputStream();try(InputStream in=c.getInputStream()){byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1){if(bytes.size()+n>65536)throw new IOException("Update metadata is too large.");bytes.write(buffer,0,n);}}finally{c.disconnect();}
             UpdateManifest manifest=UpdateManifest.parse(bytes.toString("UTF-8"));long version=manifest.version;String name=manifest.name,url=manifest.url,sha=manifest.sha256;
             PackageInfo current=activity.getPackageManager().getPackageInfo(activity.getPackageName(),0);long installed=Build.VERSION.SDK_INT>=28?current.getLongVersionCode():current.versionCode;
+            if(!requestedUrl.equals(channelUrl()))return;
             boolean report=MANUAL_REQUESTED.getAndSet(false);
             if(version>installed)checkUi(target->new AlertDialog.Builder(target).setTitle("Update available").setMessage("Version "+name+" is available. Download it?").setNegativeButton("Later",null).setPositiveButton("Download",(d,w)->new UpdateManager(target).download(version,url,sha)).show());
             else if(report)checkUi(target->new UpdateManager(target).message("You're up to date","No newer published release was found."));
-        }catch(Exception e){boolean report=MANUAL_REQUESTED.getAndSet(false);android.util.Log.w("CodeKanbanUpdate","Update check failed",e);if(report)checkUi(target->new UpdateManager(target).message("Could not check for updates",e.getMessage()));else checkUi(target->Toast.makeText(target,"Could not check for updates. Tap Updates for details.",Toast.LENGTH_LONG).show());}finally{CHECKING.set(false);}},"update-check").start();
+        }catch(Exception e){boolean report=MANUAL_REQUESTED.getAndSet(false);android.util.Log.w("CodeKanbanUpdate","Update check failed",e);if(report)checkUi(target->new UpdateManager(target).message("Could not check for updates",e.getMessage()));else checkUi(target->Toast.makeText(target,"Could not check for updates. Tap Updates for details.",Toast.LENGTH_LONG).show());}finally{CHECKING.set(false);if(!requestedUrl.equals(channelUrl()))checkUi(target->new UpdateManager(target).check(false));}},"update-check").start();
     }
     private void download(long version,String url,String expectedHash){
         if(!DOWNLOADING.compareAndSet(false,true)){Toast.makeText(activity,"An update is already downloading",Toast.LENGTH_SHORT).show();return;}Toast.makeText(activity,"Downloading update…",Toast.LENGTH_LONG).show();
