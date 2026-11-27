@@ -31,7 +31,7 @@ final class ReminderScheduler {
             for(int c=0;c<columns.length();c++){JSONObject col=columns.optJSONObject(c);JSONArray cards=col==null?null:col.optJSONArray("cards");if(cards==null)continue;
                 for(int i=0;i<cards.length();i++){JSONObject card=cards.optJSONObject(i);JSONArray reminders=card==null?null:card.optJSONArray("reminders");if(reminders==null)continue;
                     for(int j=0;j<reminders.length();j++){JSONObject reminder=reminders.optJSONObject(j);if(reminder==null)continue;long at=time(reminder);String bid=board.optString("id"),cid=card.optString("id"),rid=reminder.optString("id");
-                        if(!ReminderModel.pending(reminder)||bid.isEmpty()||cid.isEmpty()||rid.isEmpty()||prefs.getBoolean("delivered/"+key(cid,rid,at),false))continue;
+                        if(!ReminderSubscriptions.subscribed(context,cid,reminder)||!ReminderModel.pending(reminder)||bid.isEmpty()||cid.isEmpty()||rid.isEmpty()||prefs.getBoolean("delivered/"+key(cid,rid,at),false))continue;
                         Uri uri=uri(bid,cid,rid,at);String identity=key(cid,rid,at);if(prefs.getBoolean("active/"+identity,false)){next.add(uri.toString());continue;}
                         next.add(uri.toString());PendingIntent pi=alarmIntent(context,uri);long trigger=Math.max(System.currentTimeMillis()+500,AlarmTiming.nextTrigger(at,prefs.getLong("snooze/"+identity,0)));
                         try{if(Build.VERSION.SDK_INT<31||alarms.canScheduleExactAlarms()){
@@ -42,7 +42,7 @@ final class ReminderScheduler {
                 }
             }
         }
-        for(String previous:old)if(!next.contains(previous))alarms.cancel(alarmIntent(context,Uri.parse(previous)));
+        for(String previous:old)if(!next.contains(previous)){alarms.cancel(alarmIntent(context,Uri.parse(previous)));NotificationManager notifications=(NotificationManager)context.getSystemService(Context.NOTIFICATION_SERVICE);if(notifications!=null)try{if(lookup(context,Uri.parse(previous))==null)notifications.cancel(previous,0);}catch(Exception e){android.util.Log.w("CodeKanbanReminder","Could not inspect stale notification",e);}}
         prefs.edit().putStringSet("scheduled",next).apply();
     }
     static void syncSaved(Context context){try{sync(context,read(context));}catch(Exception ignored){}}
@@ -59,7 +59,7 @@ final class ReminderScheduler {
         if(uri==null||!"codekanban".equals(uri.getScheme())||!"reminder".equals(uri.getAuthority())||uri.getPathSegments().size()!=4)return null;
         List<String> p=uri.getPathSegments();long when=Long.parseLong(p.get(3));JSONArray boards=read(context).getJSONArray("boards");
         for(int i=0;i<boards.length();i++){JSONObject board=boards.getJSONObject(i);if(!p.get(0).equals(board.optString("id")))continue;WorkItemRelations.Entry entry=WorkItemRelations.find(board,p.get(1));if(entry==null)return null;JSONArray reminders=entry.card.optJSONArray("reminders");if(reminders==null)return null;
-            for(int j=0;j<reminders.length();j++){JSONObject reminder=reminders.optJSONObject(j);if(reminder!=null&&p.get(2).equals(reminder.optString("id"))&&when==time(reminder)&&ReminderModel.pending(reminder))return new JSONObject[]{board,entry.card,reminder};}return null;}
+            for(int j=0;j<reminders.length();j++){JSONObject reminder=reminders.optJSONObject(j);if(reminder!=null&&p.get(2).equals(reminder.optString("id"))&&when==time(reminder)&&ReminderModel.pending(reminder)&&ReminderSubscriptions.subscribed(context,p.get(1),reminder))return new JSONObject[]{board,entry.card,reminder};}return null;}
         return null;
     }
     static void deliver(Context context,Uri uri){
@@ -69,7 +69,7 @@ final class ReminderScheduler {
             for(int i=0;i<boards.length();i++)if(bid.equals(boards.getJSONObject(i).optString("id"))){board=boards.getJSONObject(i);break;}if(board==null)return;
             WorkItemRelations.Entry entry=WorkItemRelations.find(board,cid);if(entry==null)return;card=entry.card;JSONArray reminders=card.optJSONArray("reminders");if(reminders==null)return;
             for(int i=0;i<reminders.length();i++){JSONObject candidate=reminders.optJSONObject(i);if(candidate!=null&&rid.equals(candidate.optString("id"))&&when==time(candidate)){reminder=candidate;break;}}
-            if(!ReminderModel.pending(reminder))return;
+            if(!ReminderModel.pending(reminder)||!ReminderSubscriptions.subscribed(context,cid,reminder))return;
             SharedPreferences prefs=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE);String delivery="delivered/"+key(cid,rid,when);if(prefs.getBoolean(delivery,false))return;
             String identity=key(cid,rid,when);if(prefs.getLong("snooze/"+identity,when)>System.currentTimeMillis()+1000)return;
             if(reminder.optBoolean("fullScreen")){
