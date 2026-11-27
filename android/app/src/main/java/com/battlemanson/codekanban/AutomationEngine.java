@@ -8,7 +8,7 @@ final class AutomationEngine {
     static final String[] TRIGGERS={"created","updated","moved","conditions","buttonTap","buttonDoubleTap","buttonLongPress"};
     static final String[] FIELDS={"column","previousColumn","ageHours","columnAgeHours","title","description","labels","priority","points","difficulty","overdue","tasksComplete"};
     static final String[] OPS={"eq","ne","contains","gte","lte"};
-    static final String[] ACTIONS={"color","clearColor","completeTasks","reopenTasks","reminder","label","priority","points","difficulty"};
+    static final String[] ACTIONS={"color","clearColor","completeTasks","reopenTasks","reminder","label","priority","points","difficulty","resetColumnAge","setColumnAgeHours","resetItemAge","setItemAgeHours","title","description","due","clearDue"};
     static final class Item {
         final JSONObject board,column,card;
         Item(JSONObject b,JSONObject c,JSONObject w){board=b;column=c;card=w;}
@@ -34,6 +34,9 @@ final class AutomationEngine {
         for(int i=0;i<actions.length();i++){JSONObject a=actions.getJSONObject(i);String type=a.getString("type"),v=a.optString("value");if(!Arrays.asList(ACTIONS).contains(type))throw new JSONException("Unsupported action.");
             if(type.equals("color")&&!v.matches("#[0-9a-fA-F]{6}"))throw new JSONException("Use a color such as #EF4444.");
             if(Arrays.asList("reminder","priority","points","difficulty").contains(type)){double n=number(v);if(!Double.isFinite(n)||n<0||(type.equals("reminder")&&(n<1||n>525600)))throw new JSONException("Use a non-negative number; reminder delay must be 1–525600 minutes.");}
+            if(type.equals("setColumnAgeHours")||type.equals("setItemAgeHours")){double hours=number(v);if(!Double.isFinite(hours)||hours<0||hours>876000)throw new JSONException("Age must be between 0 and 876000 hours (100 years).");}
+            if(type.equals("title")&&v.trim().isEmpty())throw new JSONException("Work item titles cannot be empty.");
+            if(type.equals("due"))try{java.time.LocalDate.parse(v);}catch(Exception e){throw new JSONException("Due dates must use YYYY-MM-DD.");}
             if(type.equals("label")&&(v.trim().isEmpty()||v.contains(",")))throw new JSONException("Enter one non-empty label without commas.");
         }
     }
@@ -82,6 +85,12 @@ final class AutomationEngine {
             }
             for(String key:new ArrayList<>(keys(matches)))if(!live.contains(key))matches.remove(key);
         }
+        // Re-arm immediately when actions make a previously matched condition false.
+        // This survives closing the app until after the next stale threshold.
+        for(int r=0;r<rules.length();r++){JSONObject rule=rules.getJSONObject(r);if(!rule.optBoolean("enabled",true)||!rule.optString("trigger").equals("conditions")||rule.has("error"))continue;
+            JSONObject remembered=state.optJSONObject(rule.optString("id"));if(remembered==null)continue;
+            for(Item item:current)if(remembered.optBoolean(item.key())&&!matches(rule,item,previous(item,old,current),now))remembered.remove(item.key());
+        }
         for(String key:new ArrayList<>(keys(state)))if(!activeRules.contains(key))state.remove(key);
         return !original.equals(draft.toString());
     }
@@ -109,6 +118,11 @@ final class AutomationEngine {
     private static void act(JSONObject card,JSONObject action,String rule,long now,String device)throws JSONException{
         String type=action.getString("type"),value=action.optString("value");
         switch(type){
+            case "resetColumnAge":card.put("columnEnteredAt",now);break;
+            case "setColumnAgeHours":card.put("columnEnteredAt",now-(long)(number(value)*3600000d));break;
+            case "resetItemAge":card.put("createdAt",now);break;
+            case "setItemAgeHours":card.put("createdAt",now-(long)(number(value)*3600000d));break;
+            case "clearDue":card.remove("due");break;
             case "color":card.put("automationColor",value);break;
             case "clearColor":card.remove("automationColor");break;
             case "completeTasks":case "reopenTasks":JSONArray tasks=card.optJSONArray("tasks");if(tasks!=null)for(int t=0;t<tasks.length();t++)tasks.getJSONObject(t).put("done",type.equals("completeTasks"));break;
@@ -120,7 +134,7 @@ final class AutomationEngine {
     /** Adopt evaluated fields after the atomic write, preserving live card/task references. */
     static void adopt(JSONObject live,JSONObject saved)throws JSONException{
         Map<String,Item> byKey=new HashMap<>();for(Item item:items(saved))byKey.put(item.key(),item);
-        String[] fields={"createdAt","columnEnteredAt","automationColor","priority","points","difficulty","labels","reminders"};
+        String[] fields={"createdAt","columnEnteredAt","automationColor","priority","points","difficulty","labels","reminders","title","description","due"};
         for(Item item:items(live)){Item result=byKey.get(item.key());if(result==null)continue;for(String field:fields)if(result.card.has(field))item.card.put(field,result.card.get(field));else item.card.remove(field);
             JSONArray tasks=item.card.optJSONArray("tasks"),savedTasks=result.card.optJSONArray("tasks");if(tasks!=null&&savedTasks!=null)for(int i=0;i<tasks.length()&&i<savedTasks.length();i++)tasks.getJSONObject(i).put("done",savedTasks.getJSONObject(i).optBoolean("done"));
         }

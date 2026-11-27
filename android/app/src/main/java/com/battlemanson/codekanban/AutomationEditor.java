@@ -15,7 +15,7 @@ final class AutomationEditor {
     private static final String[] TRIGGER_LABELS={"Work item created","Work item updated","Work item moved to a column","Conditions become true (including age)","Button tapped","Button double-tapped","Button long-pressed"};
     private static final String[] FIELD_LABELS={"Column name","Previous column name","Item age (hours)","Column age (hours)","Title","Description","Labels","Priority","Story points","Difficulty","Due date overdue (true/false)","All tasks complete (true/false)"};
     private static final String[] OP_LABELS={"Equals","Does not equal","Contains","At least","At most"};
-    private static final String[] ACTION_LABELS={"Set card accent color","Clear card accent color","Complete all tasks","Reopen all tasks","Add reminder after minutes","Add label","Set priority","Set story points","Set difficulty"};
+    private static final String[] ACTION_LABELS={"Set card accent color","Clear card accent color","Complete all tasks","Reopen all tasks","Add reminder after minutes","Add label","Set priority","Set story points","Set difficulty","Reset column age to zero","Set column age (hours)","Reset item age to zero","Set item age (hours)","Set title","Set description","Set due date (YYYY-MM-DD)","Clear due date"};
     private final Activity activity;private final JSONObject data,rule;private final int ink,muted;private final Consumer<JSONObject> saved;
     private LinearLayout conditions,actions;private EditText name,buttonId;private Spinner scope,trigger,match,buttonSource;private CheckBox enabled;
     private final ArrayList<String> boardIds=new ArrayList<>();
@@ -84,8 +84,8 @@ final class AutomationEditor {
     }
     private void action(JSONObject source,int position){
         LinearLayout form=vertical();form.setPadding(dp(20),dp(10),dp(20),dp(12));Spinner type=spinner(form,ACTION_LABELS,index(AutomationEngine.ACTIONS,source==null?"completeTasks":source.optString("type")));
-        EditText value=input(form,source==null?"":source.optString("value"),"Color, minutes, label or numeric value");
-        form.addView(text("Color: #EF4444. Reminder: minutes after the trigger (e.g. 60). Complete/reopen tasks and clear color need no value. Conditions-become-true rules add a reminder only when they first match, not every minute.",13,muted));
+        EditText value=input(form,source==null?"":source.optString("value"),"Color, age in hours, reminder minutes, text or date");
+        form.addView(text("Reset column age restarts its stale timer at zero. Set age uses hours, including decimals (0.5 = 30 minutes). Reset age, clear color, clear due date and complete/reopen tasks need no value. Color: #EF4444. Reminder delay: minutes. Due date: YYYY-MM-DD. Add Clear card accent color and Reset column age to the same button rule to clear staleness until it ages again.",13,muted));
         AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("Action").setView(form).setNegativeButton("Cancel",null).setNeutralButton(position<0?null:"Remove",(d,w)->{rule.optJSONArray("actions").remove(position);render();}).setPositiveButton("Done",null).create();
         dialog.setOnShowListener(d->dialog.getButton(-1).setOnClickListener(v->{try{JSONObject a=new JSONObject().put("type",AutomationEngine.ACTIONS[type.getSelectedItemPosition()]).put("value",value.getText().toString().trim());JSONArray as=rule.getJSONArray("actions");if(position<0)as.put(a);else as.put(position,a);render();dialog.dismiss();}catch(JSONException e){value.setError(e.getMessage());}}));dialog.show();
     }
