@@ -28,6 +28,8 @@ public class MainActivity extends Activity {
     private int INK, MUTED, ACCENT, BG, SURFACE, BORDER; private boolean dark;
     private JSONObject data; private String current="", tab="boards"; private LinearLayout root, content; private ScrollView boardScroll;
     private boolean skipNextUpdateCheck, defaultColumnsExpanded, updatesExpanded, backupExpanded;
+    private final android.os.Handler updateHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable betaUpdateCheck=new Runnable(){@Override public void run(){new UpdateManager(MainActivity.this).checkPeriodically();updateHandler.postDelayed(this,UpdatePolling.INTERVAL);}};
     private String themeMode(){return getPreferences(MODE_PRIVATE).getString("themeMode","device");}
     private static final int PICK_BACKUP_FOLDER=1001,PICK_RESTORE_FILE=1002;
     private static final int PICK_ALARM_SOUND=1003;
@@ -67,7 +69,8 @@ public class MainActivity extends Activity {
         skipNextUpdateCheck=getIntent()!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(getIntent().getAction());
         load();migrateLegacyReminders();if(data!=null)try{if(ReminderSubscriptions.prepare(this,data,false))save();}catch(JSONException e){error("Could not initialize reminder subscriptions",e.getMessage());}if(getIntent().getBooleanExtra("settingsOpen",false)){tab="settings";getIntent().removeExtra("settingsOpen");}show();openReminder(getIntent());
     }
-    @Override protected void onResume(){super.onResume();syncReminders();UpdateManager updates=new UpdateManager(this);boolean pending=updates.resumePending();if(skipNextUpdateCheck)skipNextUpdateCheck=false;else if(!pending&&data!=null)updates.check(false);}
+    @Override protected void onResume(){super.onResume();UpdateManager.attach(this);updateHandler.removeCallbacks(betaUpdateCheck);updateHandler.postDelayed(betaUpdateCheck,UpdatePolling.INTERVAL);syncReminders();UpdateManager updates=new UpdateManager(this);boolean pending=updates.resumePending();if(skipNextUpdateCheck)skipNextUpdateCheck=false;else if(!pending&&data!=null)updates.checkOnResume();}
+    @Override protected void onStop(){updateHandler.removeCallbacks(betaUpdateCheck);UpdateManager.detach(this);super.onStop();}
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){super.onRequestPermissionsResult(requestCode,permissions,grantResults);if(requestCode==2001)syncReminders();}
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(intent!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction()))skipNextUpdateCheck=true;openReminder(intent);}
     private void openReminder(Intent intent){if(intent!=null&&ReminderSubscriptions.OPEN.equals(intent.getAction())){tab="reminders";show();intent.setAction(null);return;}if(intent==null||!"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction())||data==null)return;String boardId=intent.getStringExtra("boardId"),id=intent.getStringExtra("cardId");if(boardId!=null&&id!=null){JSONObject b=find(array(data,"boards"),boardId);if(b!=null)revealCard(b,id);}intent.setAction(null);}

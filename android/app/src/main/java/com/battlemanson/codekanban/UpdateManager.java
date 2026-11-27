@@ -24,12 +24,21 @@ final class UpdateManager {
     private static final AtomicBoolean CHECKING=new AtomicBoolean(),DOWNLOADING=new AtomicBoolean();
     private static final AtomicBoolean MANUAL_REQUESTED=new AtomicBoolean();
     private static volatile WeakReference<Activity> checkTarget=new WeakReference<>(null);
+    private static final UpdatePolling POLLING=new UpdatePolling();
+    private static String promptedSource="";private static long promptedVersion;
+    private static WeakReference<AlertDialog> updateDialog=new WeakReference<>(null);
+    static void attach(Activity activity){checkTarget=new WeakReference<>(activity);}
+    static void detach(Activity activity){if(checkTarget.get()==activity)checkTarget=new WeakReference<>(null);}
     private final Activity activity;
     UpdateManager(Activity activity){this.activity=activity;}
     private void ui(Runnable action){activity.runOnUiThread(()->{if(!activity.isFinishing()&&!activity.isDestroyed())action.run();});}
     private static void checkUi(java.util.function.Consumer<Activity> action){Activity target=checkTarget.get();if(target==null)return;target.runOnUiThread(()->{Activity latest=checkTarget.get();if(latest!=null&&!latest.isFinishing()&&!latest.isDestroyed())action.accept(latest);});}
     private HttpURLConnection connect(String address,String accept)throws IOException{
-        URL url=new URL(address);for(int i=0;i<7;i++){if(!"https".equalsIgnoreCase(url.getProtocol()))throw new IOException("Updates require HTTPS.");HttpURLConnection c=(HttpURLConnection)url.openConnection();c.setConnectTimeout(15000);c.setReadTimeout(45000);c.setInstanceFollowRedirects(false);c.setRequestProperty("Accept",accept);int status=c.getResponseCode();
+        URL url=new URL(address);for(int i=0;i<7;i++){if(!"https".equalsIgnoreCase(url.getProtocol()))throw new IOException("Updates require HTTPS.");HttpURLConnection c=(HttpURLConnection)url.openConnection();c.setConnectTimeout(15000);c.setReadTimeout(45000);c.setInstanceFollowRedirects(false);c.setRequestProperty("Accept",accept);c.setUseCaches(false);c.setRequestProperty("Cache-Control","no-cache");int status=c.getResponseCode();
+            if(status==429||status==403){String retry=c.getHeaderField("Retry-After"),remaining=c.getHeaderField("X-RateLimit-Remaining");if(status==429||retry!=null||"0".equals(remaining)){
+                long delay=15*60_000L;try{if(retry!=null){try{delay=Long.parseLong(retry)*1000L;}catch(NumberFormatException notSeconds){delay=java.time.ZonedDateTime.parse(retry,java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()-System.currentTimeMillis();}}else{String reset=c.getHeaderField("X-RateLimit-Reset");if(reset!=null)delay=Long.parseLong(reset)*1000L-System.currentTimeMillis();}}catch(Exception ignored){}
+                POLLING.rateLimited(android.os.SystemClock.elapsedRealtime(),Math.max(60_000L,delay));
+            }}
             if(status>=300&&status<400){String location=c.getHeaderField("Location");c.disconnect();if(location==null)throw new IOException("Invalid update redirect.");url=new URL(url,location);continue;}
             if(status!=200){c.disconnect();throw new IOException("GitHub returned HTTP "+status+". If this is an update check, the "+selectedChannel()+" feed may not have been published yet. Check the release channel under Settings.");}String type=c.getContentType();if(type!=null&&type.toLowerCase(Locale.ROOT).contains("text/html")){c.disconnect();throw new IOException("The update source returned a web page instead of a release.");}return c;}
         throw new IOException("Too many update redirects.");
@@ -40,21 +49,32 @@ final class UpdateManager {
         if(!"beta".equals(channel))channel="stable";
         return BuildConfig.UPDATE_MANIFEST_URL.replace("/releases/latest/download/", "/releases/download/android-"+channel+"/");
     }
-    void check(boolean manual){
+    void checkPeriodically(){if("beta".equals(selectedChannel())&&!BuildConfig.UPDATE_MANIFEST_URL.isEmpty())check(false);}
+    void checkOnResume(){check(false,true);}
+    void check(boolean manual){check(manual,false);}
+    private void check(boolean manual,boolean resumed){
         if(BuildConfig.UPDATE_MANIFEST_URL.isEmpty()){if(manual)message("Updates unavailable","Install an APK built by the GitHub release workflow to enable update checks.");else Toast.makeText(activity,"Updates unavailable in this build",Toast.LENGTH_LONG).show();return;}
+        boolean beta="beta".equals(selectedChannel());
+        if(!POLLING.start(android.os.SystemClock.elapsedRealtime(),manual||resumed||!beta)){if(manual)Toast.makeText(activity,"Update checks are waiting before retrying. Try again shortly.",Toast.LENGTH_LONG).show();return;}
         checkTarget=new WeakReference<>(activity);if(manual)MANUAL_REQUESTED.set(true);
         if(!CHECKING.compareAndSet(false,true)){if(manual)Toast.makeText(activity,"Already checking for updates",Toast.LENGTH_SHORT).show();return;}
         if(manual)Toast.makeText(activity,"Checking for updates…",Toast.LENGTH_SHORT).show();
         final String requestedUrl=channelUrl();
         new Thread(()->{try{
             HttpURLConnection c=connect(requestedUrl,"application/json");ByteArrayOutputStream bytes=new ByteArrayOutputStream();try(InputStream in=c.getInputStream()){byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1){if(bytes.size()+n>65536)throw new IOException("Update metadata is too large.");bytes.write(buffer,0,n);}}finally{c.disconnect();}
-            UpdateManifest manifest=UpdateManifest.parse(bytes.toString("UTF-8"));long version=manifest.version;String name=manifest.name,url=manifest.url,sha=manifest.sha256;
+            UpdateManifest manifest=UpdateManifest.parse(bytes.toString("UTF-8"));long version=manifest.version;String name=manifest.name,url=manifest.url,sha=manifest.sha256;POLLING.success();
             PackageInfo current=activity.getPackageManager().getPackageInfo(activity.getPackageName(),0);long installed=Build.VERSION.SDK_INT>=28?current.getLongVersionCode():current.versionCode;
             if(!requestedUrl.equals(channelUrl()))return;
             boolean report=MANUAL_REQUESTED.getAndSet(false);
-            if(version>installed)checkUi(target->new AlertDialog.Builder(target).setTitle("Update available").setMessage("Version "+name+" is available. Download it?").setNegativeButton("Later",null).setPositiveButton("Download",(d,w)->new UpdateManager(target).download(version,url,sha)).show());
+            if(version>installed)checkUi(target->{
+                if(!requestedUrl.equals(new UpdateManager(target).channelUrl())||DOWNLOADING.get())return;
+                AlertDialog showing=updateDialog.get();if(showing!=null&&showing.isShowing())return;
+                if(!report&&requestedUrl.equals(promptedSource)&&version==promptedVersion)return;
+                AlertDialog dialog=new AlertDialog.Builder(target).setTitle("Update available").setMessage("Version "+name+" is available. Download it?").setNegativeButton("Later",null).setPositiveButton("Download",(d,w)->new UpdateManager(target).download(version,url,sha)).create();
+                promptedSource=requestedUrl;promptedVersion=version;updateDialog=new WeakReference<>(dialog);dialog.show();
+            });
             else if(report)checkUi(target->new UpdateManager(target).message("You're up to date","Installed build: "+installed+". Latest "+selectedChannel()+" build: "+version+". A higher version code is required to update."));
-        }catch(Exception e){boolean report=MANUAL_REQUESTED.getAndSet(false);android.util.Log.w("CodeKanbanUpdate","Update check failed",e);if(report)checkUi(target->new UpdateManager(target).message("Could not check for updates",e.getMessage()));else checkUi(target->Toast.makeText(target,"Could not check for updates. Tap Updates for details.",Toast.LENGTH_LONG).show());}finally{CHECKING.set(false);if(!requestedUrl.equals(channelUrl()))checkUi(target->new UpdateManager(target).check(false));}},"update-check").start();
+        }catch(Exception e){POLLING.failed(android.os.SystemClock.elapsedRealtime());boolean report=MANUAL_REQUESTED.getAndSet(false);android.util.Log.w("CodeKanbanUpdate","Update check failed",e);if(report)checkUi(target->new UpdateManager(target).message("Could not check for updates",e.getMessage()));}finally{CHECKING.set(false);if(!requestedUrl.equals(channelUrl()))checkUi(target->new UpdateManager(target).check(false));}},"update-check").start();
     }
     private void download(long version,String url,String expectedHash){
         if(!DOWNLOADING.compareAndSet(false,true)){Toast.makeText(activity,"An update is already downloading",Toast.LENGTH_SHORT).show();return;}Toast.makeText(activity,"Downloading update…",Toast.LENGTH_LONG).show();
