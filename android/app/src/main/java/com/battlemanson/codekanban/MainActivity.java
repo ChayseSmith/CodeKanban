@@ -111,7 +111,7 @@ public class MainActivity extends Activity {
         String title=tab.equals("boards")?(board()==null?"Your boards":board().optString("name")):tab.equals("all")?"Across boards":"Settings";
         LinearLayout titleRow=new LinearLayout(this);titleRow.setGravity(Gravity.CENTER_VERTICAL);header.addView(titleRow);if(tab.equals("boards")&&board()!=null){TextView icon=boardIcon(board(),22);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(36),dp(36));p.rightMargin=dp(10);titleRow.addView(icon,p);}TextView h=text(title,27,INK,true);titleRow.addView(h,new LinearLayout.LayoutParams(0,-2,1));TextView sub=text(tab.equals("boards")?(board()==null?"Organize work, your way":"Board · "+path(board())):tab.equals("all")?"Work items from every board":"Appearance, templates, updates and backups",13,MUTED,false);header.addView(sub);
         HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);LinearLayout nav=new LinearLayout(this);scroll.addView(nav);header.addView(scroll);
-        nav.addView(action("Boards",()->{tab="boards";show();}));nav.addView(action("All work",()->{tab="all";show();}));nav.addView(action("Settings",()->{tab="settings";show();}));
+        nav.addView(action("Boards",()->{if(tab.equals("boards"))current="";tab="boards";show();}));nav.addView(action("All work",()->{tab="all";show();}));nav.addView(action("Settings",()->{tab="settings";show();}));
         ScrollView sv=new ScrollView(this);boardScroll=sv;sv.setFillViewport(true);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));content=vertical();content.setPadding(dp(16),dp(16),dp(16),dp(28));sv.addView(content);
         if(tab.equals("settings"))settings();else if(tab.equals("all"))all();else if(board()==null)boards();else boardView();
     }
@@ -334,7 +334,12 @@ public class MainActivity extends Activity {
     }
     private void restoreBackup(JSONObject backup){try{JSONObject previous=data;String previousTheme=themeMode();data=backup.getJSONObject("data");getPreferences(MODE_PRIVATE).edit().putString("themeMode",backup.optString("themeMode",backup.getBoolean("darkMode")?"dark":"light")).apply();if(save()){current="";tab="boards";recreate();}else{data=previous;getPreferences(MODE_PRIVATE).edit().putString("themeMode",previousTheme).apply();}}catch(JSONException e){error("Could not restore backup",e.getMessage());}}
     private void settings(){
-        TextView updatesToggle=action((updatesExpanded?"▾":"▸")+"  Updates",()->{updatesExpanded=!updatesExpanded;show();});updatesToggle.setContentDescription((updatesExpanded?"Collapse":"Expand")+" Updates");content.addView(updatesToggle);
+        section("Appearance");
+        Spinner theme=new Spinner(this);theme.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Light Mode","Dark Mode","Follow Device"}));
+        theme.setSelection("light".equals(themeMode())?0:"dark".equals(themeMode())?1:2);content.addView(theme);
+        theme.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){String selected=new String[]{"light","dark","device"}[position],previous=themeMode();if(!selected.equals(previous)){getPreferences(MODE_PRIVATE).edit().putString("themeMode",selected).apply();if(save()){Intent intent=getIntent();intent.putExtra("settingsOpen",true);recreate();}else getPreferences(MODE_PRIVATE).edit().putString("themeMode",previous).apply();}}});
+
+        TextView updatesToggle=action((updatesExpanded?"▾":"▸")+"  Updates",()->{updatesExpanded=!updatesExpanded;show();});updatesToggle.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);updatesToggle.setContentDescription((updatesExpanded?"Collapse":"Expand")+" Updates");content.addView(updatesToggle);
         if(updatesExpanded){
         button("Check for updates",()->new UpdateManager(this).check(true));
         TextView channelLabel=text("Release channel",16,INK,true);content.addView(channelLabel);
@@ -343,17 +348,12 @@ public class MainActivity extends Activity {
         channel.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){String selected=position==1?"beta":"stable";String previous=getSharedPreferences("app_updates",MODE_PRIVATE).getString("channel","stable");if(!selected.equals(previous)){getSharedPreferences("app_updates",MODE_PRIVATE).edit().putString("channel",selected).apply();new UpdateManager(MainActivity.this).check(true);}}});
 
         }
-        TextView backupToggle=action((backupExpanded?"▾":"▸")+"  Backup",()->{backupExpanded=!backupExpanded;show();});backupToggle.setContentDescription((backupExpanded?"Collapse":"Expand")+" Backup");content.addView(backupToggle);
+        TextView backupToggle=action((backupExpanded?"▾":"▸")+"  Backup",()->{backupExpanded=!backupExpanded;show();});backupToggle.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);backupToggle.setContentDescription((backupExpanded?"Collapse":"Expand")+" Backup");content.addView(backupToggle);
         if(backupExpanded)backupView();
-        section("Appearance");
-        Spinner theme=new Spinner(this);theme.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Light Mode","Dark Mode","Follow Device"}));
-        theme.setSelection("light".equals(themeMode())?0:"dark".equals(themeMode())?1:2);content.addView(theme);
-        theme.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){String selected=new String[]{"light","dark","device"}[position],previous=themeMode();if(!selected.equals(previous)){getPreferences(MODE_PRIVATE).edit().putString("themeMode",selected).apply();if(save()){Intent intent=getIntent();intent.putExtra("settingsOpen",true);recreate();}else getPreferences(MODE_PRIVATE).edit().putString("themeMode",previous).apply();}}});
-
-        empty("New boards copy this template. Existing boards are compared when opened. Changes here do not alter existing boards.");
         try{JSONObject t=template();JSONArray lists=t.getJSONArray("lists");
-            TextView columnsToggle=action((defaultColumnsExpanded?"▾":"▸")+"  Default Columns",()->{defaultColumnsExpanded=!defaultColumnsExpanded;show();});columnsToggle.setContentDescription((defaultColumnsExpanded?"Collapse":"Expand")+" Default Columns");content.addView(columnsToggle);
+            TextView columnsToggle=action((defaultColumnsExpanded?"▾":"▸")+"  Default Columns",()->{defaultColumnsExpanded=!defaultColumnsExpanded;show();});columnsToggle.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);columnsToggle.setContentDescription((defaultColumnsExpanded?"Collapse":"Expand")+" Default Columns");content.addView(columnsToggle);
             if(defaultColumnsExpanded){
+            empty("New boards copy this template. Existing boards are compared when opened. Changes here do not alter existing boards.");
             for(int i=0;i<lists.length();i++){final int index=i;JSONObject col=lists.getJSONObject(i);LinearLayout row=tile();TextView name=text("●  "+col.optString("title"),17,INK,true);row.addView(name);row.addView(text("Color: "+(col.optString("color").isEmpty()?"none":col.optString("color"))+"  ·  "+col.getJSONArray("cards").length()+" starter items",13,MUTED,false));row.setOnClickListener(v->editDefaultColumn(t,index));}
             button("+ Add default column",()->input("New default column","Column name","",name->{try{lists.put(BoardTemplate.empty(name,palette[lists.length()%palette.length]));saveTemplate(t);show();}catch(JSONException e){error("Invalid column",e.getMessage());}}));
             }
