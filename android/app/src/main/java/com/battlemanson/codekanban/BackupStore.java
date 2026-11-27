@@ -17,9 +17,9 @@ import java.util.UUID;
 final class BackupStore {
     private static final int MAX_BYTES=20*1024*1024;
     private BackupStore() {}
-    static String snapshot(JSONObject data,boolean dark) throws JSONException {
+    static String snapshot(JSONObject data,boolean dark,String themeMode) throws JSONException {
         String snapshot=new JSONObject().put("format","code-kanban-backup").put("version",1)
-            .put("darkMode",dark).put("data",new JSONObject(data.toString())).toString();
+            .put("themeMode",themeMode).put("darkMode",dark).put("data",new JSONObject(data.toString())).toString();
         if(snapshot.getBytes(StandardCharsets.UTF_8).length>MAX_BYTES)throw new JSONException("Backup is too large (limit 20 MB).");
         return snapshot;
     }
@@ -28,6 +28,7 @@ final class BackupStore {
         if(!"code-kanban-backup".equals(backup.optString("format"))||backup.optInt("version")!=1)
             throw new JSONException("Not a supported Code Kanban backup.");
         if(!(backup.opt("darkMode") instanceof Boolean))throw new JSONException("Missing theme setting.");
+        if(backup.has("themeMode")&&!java.util.Arrays.asList("light","dark","device").contains(backup.optString("themeMode")))throw new JSONException("Invalid theme setting.");
         JSONObject data=backup.getJSONObject("data");JSONArray boards=data.getJSONArray("boards");
         for(int i=0;i<boards.length();i++){
             JSONObject board=boards.getJSONObject(i);board.getString("id");board.getString("name");

@@ -31,12 +31,12 @@ final class UpdateManager {
     private HttpURLConnection connect(String address,String accept)throws IOException{
         URL url=new URL(address);for(int i=0;i<7;i++){if(!"https".equalsIgnoreCase(url.getProtocol()))throw new IOException("Updates require HTTPS.");HttpURLConnection c=(HttpURLConnection)url.openConnection();c.setConnectTimeout(15000);c.setReadTimeout(45000);c.setInstanceFollowRedirects(false);c.setRequestProperty("Accept",accept);int status=c.getResponseCode();
             if(status>=300&&status<400){String location=c.getHeaderField("Location");c.disconnect();if(location==null)throw new IOException("Invalid update redirect.");url=new URL(url,location);continue;}
-            if(status!=200){c.disconnect();throw new IOException("GitHub returned HTTP "+status+". If this is an update check, the "+selectedChannel()+" feed may not have been published yet. Check the release channel under Defaults.");}String type=c.getContentType();if(type!=null&&type.toLowerCase(Locale.ROOT).contains("text/html")){c.disconnect();throw new IOException("The update source returned a web page instead of a release.");}return c;}
+            if(status!=200){c.disconnect();throw new IOException("GitHub returned HTTP "+status+". If this is an update check, the "+selectedChannel()+" feed may not have been published yet. Check the release channel under Settings.");}String type=c.getContentType();if(type!=null&&type.toLowerCase(Locale.ROOT).contains("text/html")){c.disconnect();throw new IOException("The update source returned a web page instead of a release.");}return c;}
         throw new IOException("Too many update redirects.");
     }
-    private String selectedChannel(){String selected=activity.getSharedPreferences(PREFS,Activity.MODE_PRIVATE).getString("channel",BuildConfig.DEFAULT_RELEASE_CHANNEL);return "beta".equals(selected)?"beta":"stable";}
+    private String selectedChannel(){String selected=activity.getSharedPreferences(PREFS,Activity.MODE_PRIVATE).getString("channel","stable");return "beta".equals(selected)?"beta":"stable";}
     private String channelUrl(){
-        String channel=activity.getSharedPreferences("app_updates",Activity.MODE_PRIVATE).getString("channel",BuildConfig.DEFAULT_RELEASE_CHANNEL);
+        String channel=activity.getSharedPreferences("app_updates",Activity.MODE_PRIVATE).getString("channel","stable");
         if(!"beta".equals(channel))channel="stable";
         return BuildConfig.UPDATE_MANIFEST_URL.replace("/releases/latest/download/", "/releases/download/android-"+channel+"/");
     }
