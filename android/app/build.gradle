@@ -11,6 +11,7 @@ android {
         targetSdk 35
         versionCode providers.gradleProperty('kanbanVersionCode').getOrElse('1').toInteger()
         versionName '0.1.0'
+        buildConfigField 'String', 'DEFAULT_RELEASE_CHANNEL', javaString(providers.gradleProperty('kanbanReleaseChannel').getOrElse('stable'))
         buildConfigField 'String', 'UPDATE_MANIFEST_URL', javaString(providers.gradleProperty('kanbanUpdateUrl').getOrElse(''))
     }
     buildFeatures { buildConfig true }

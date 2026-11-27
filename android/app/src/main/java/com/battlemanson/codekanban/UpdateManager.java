@@ -31,11 +31,12 @@ final class UpdateManager {
     private HttpURLConnection connect(String address,String accept)throws IOException{
         URL url=new URL(address);for(int i=0;i<7;i++){if(!"https".equalsIgnoreCase(url.getProtocol()))throw new IOException("Updates require HTTPS.");HttpURLConnection c=(HttpURLConnection)url.openConnection();c.setConnectTimeout(15000);c.setReadTimeout(45000);c.setInstanceFollowRedirects(false);c.setRequestProperty("Accept",accept);int status=c.getResponseCode();
             if(status>=300&&status<400){String location=c.getHeaderField("Location");c.disconnect();if(location==null)throw new IOException("Invalid update redirect.");url=new URL(url,location);continue;}
-            if(status!=200){c.disconnect();throw new IOException("GitHub returned HTTP "+status+". Check that the repository and release are public.");}String type=c.getContentType();if(type!=null&&type.toLowerCase(Locale.ROOT).contains("text/html")){c.disconnect();throw new IOException("The update source returned a web page instead of a release.");}return c;}
+            if(status!=200){c.disconnect();throw new IOException("GitHub returned HTTP "+status+". If this is an update check, the "+selectedChannel()+" feed may not have been published yet. Check the release channel under Defaults.");}String type=c.getContentType();if(type!=null&&type.toLowerCase(Locale.ROOT).contains("text/html")){c.disconnect();throw new IOException("The update source returned a web page instead of a release.");}return c;}
         throw new IOException("Too many update redirects.");
     }
+    private String selectedChannel(){String selected=activity.getSharedPreferences(PREFS,Activity.MODE_PRIVATE).getString("channel",BuildConfig.DEFAULT_RELEASE_CHANNEL);return "beta".equals(selected)?"beta":"stable";}
     private String channelUrl(){
-        String channel=activity.getSharedPreferences("app_updates",Activity.MODE_PRIVATE).getString("channel","stable");
+        String channel=activity.getSharedPreferences("app_updates",Activity.MODE_PRIVATE).getString("channel",BuildConfig.DEFAULT_RELEASE_CHANNEL);
         if(!"beta".equals(channel))channel="stable";
         return BuildConfig.UPDATE_MANIFEST_URL.replace("/releases/latest/download/", "/releases/download/android-"+channel+"/");
     }
@@ -52,7 +53,7 @@ final class UpdateManager {
             if(!requestedUrl.equals(channelUrl()))return;
             boolean report=MANUAL_REQUESTED.getAndSet(false);
             if(version>installed)checkUi(target->new AlertDialog.Builder(target).setTitle("Update available").setMessage("Version "+name+" is available. Download it?").setNegativeButton("Later",null).setPositiveButton("Download",(d,w)->new UpdateManager(target).download(version,url,sha)).show());
-            else if(report)checkUi(target->new UpdateManager(target).message("You're up to date","No newer published release was found."));
+            else if(report)checkUi(target->new UpdateManager(target).message("You're up to date","Installed build: "+installed+". Latest "+selectedChannel()+" build: "+version+". A higher version code is required to update."));
         }catch(Exception e){boolean report=MANUAL_REQUESTED.getAndSet(false);android.util.Log.w("CodeKanbanUpdate","Update check failed",e);if(report)checkUi(target->new UpdateManager(target).message("Could not check for updates",e.getMessage()));else checkUi(target->Toast.makeText(target,"Could not check for updates. Tap Updates for details.",Toast.LENGTH_LONG).show());}finally{CHECKING.set(false);if(!requestedUrl.equals(channelUrl()))checkUi(target->new UpdateManager(target).check(false));}},"update-check").start();
     }
     private void download(long version,String url,String expectedHash){
