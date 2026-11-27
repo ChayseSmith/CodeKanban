@@ -2,7 +2,11 @@ name: Android release
 
 on:
   push:
+    branches: ['**']
   workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * 0'
+      timezone: America/Denver
 
 permissions:
   contents: write
@@ -13,6 +17,11 @@ concurrency:
 
 jobs:
   release:
+    # Stable is scheduled only; pushes and manual runs on other branches publish beta.
+    if: >-
+      github.event_name == 'schedule' ||
+      (startsWith(github.ref, 'refs/heads/') &&
+       github.ref != format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     env:
       RELEASE_CHANNEL: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'stable' || 'beta' }}
@@ -101,3 +110,16 @@ jobs:
             gh release create "$channel_tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Android $RELEASE_CHANNEL update feed" --notes "Update metadata for the $RELEASE_CHANNEL channel." --prerelease --latest=false
           fi
           gh release upload "$channel_tag" release-output/update.json --repo "$GITHUB_REPOSITORY" --clobber
+          # Move channel tags only after the signed APK and feed are published.
+          # Keep android-stable for installed apps; android is the public stable alias.
+          tags=("$channel_tag")
+          if [[ "$RELEASE_CHANNEL" == stable ]]; then tags+=(android); fi
+          for tag in "${tags[@]}"; do
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" \
+                -f sha="$GITHUB_SHA" -F force=true --silent
+            else
+              gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" --silent
+            fi
+          done
