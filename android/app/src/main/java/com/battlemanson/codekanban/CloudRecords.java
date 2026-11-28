@@ -17,7 +17,7 @@ final class CloudRecords {
     static String id(String kind,String board,String entity){try{byte[] hash=MessageDigest.getInstance("SHA-256").digest((kind+"\n"+board+"\n"+entity).getBytes(StandardCharsets.UTF_8));StringBuilder id=new StringBuilder();for(byte b:hash)id.append(String.format(Locale.ROOT,"%02x",b&255));return id.toString();}catch(Exception e){throw new IllegalStateException(e);}}
     static Map<String,String> encode(JSONObject root)throws JSONException{
         Map<String,String> records=new TreeMap<>();JSONArray boards=root.getJSONArray("boards");
-        for(int b=0;b<boards.length();b++){JSONObject board=boards.getJSONObject(b),meta=BoardTemplate.copy(board);String bid=board.getString("id");meta.remove("columns");
+        for(int b=0;b<boards.length();b++){JSONObject board=boards.getJSONObject(b);if(board.has("_shared"))continue;JSONObject meta=BoardTemplate.copy(board);String bid=board.getString("id");meta.remove("columns");
             add(records,id("board",bid,bid),new JSONObject().put("kind","board").put("boardId",bid).put("order",b).put("data",meta));JSONArray columns=board.getJSONArray("columns");
             for(int c=0;c<columns.length();c++){JSONObject column=columns.getJSONObject(c),cm=BoardTemplate.copy(column);String cid=column.getString("id");cm.remove("cards");add(records,id("column",bid,cid),new JSONObject().put("kind","column").put("boardId",bid).put("order",c).put("data",cm));JSONArray cards=column.getJSONArray("cards");
                 for(int i=0;i<cards.length();i++){JSONObject card=cards.getJSONObject(i);add(records,id("item",bid,card.getString("id")),new JSONObject().put("kind","item").put("boardId",bid).put("columnId",cid).put("order",i).put("data",card));}

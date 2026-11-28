@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const { initializeTestEnvironment, assertSucceeds, assertFails } = require('@firebase/rules-unit-testing');
-const { doc, setDoc, getDoc, getDocs, collection, serverTimestamp } = require('firebase/firestore');
+const { doc, setDoc, getDoc, getDocs, collection, serverTimestamp, updateDoc, runTransaction, writeBatch, query, where } = require('firebase/firestore');
 (async () => {
   const test = await initializeTestEnvironment({projectId: 'demo-kanban-sync', firestore: {host: '127.0.0.1', port: 8085, rules: fs.readFileSync('firebase/firestore.rules', 'utf8')}});
   try {
@@ -20,6 +20,62 @@ const { doc, setDoc, getDoc, getDocs, collection, serverTimestamp } = require('f
     await assertFails(setDoc(doc(alice, 'users/alice/records/bad'), {...payload(), admin: true}));
     await assertFails(setDoc(doc(alice, 'users/alice/records/bad'), {...payload(), updatedAt: null}));
     await assertFails(setDoc(doc(alice, 'users/bob/records/bad'), payload()));
+    const root = 'collab-root', child = 'collab-child', grand = 'collab-grand';
+    const metadata = (parentId, ancestors) => ({ownerId:'alice',parentId,ancestors,grants:{},emails:{},deleted:false,updatedAt:serverTimestamp()});
+    await assertSucceeds(setDoc(doc(alice, 'sharedBoards/'+root), metadata('', [])));
+    await assertSucceeds(setDoc(doc(alice, 'sharedBoards/'+child), metadata(root, [root])));
+    await assertSucceeds(setDoc(doc(alice, 'sharedBoards/'+grand), metadata(child, [root,child])));
+    await assertSucceeds(updateDoc(doc(alice, 'sharedBoards/'+root), {grants:{bob:'write'},emails:{bob:'bob@example.com'},updatedAt:serverTimestamp()}));
+    const sharedPayload = () => ({...payload(),kind:'item'});
+    await assertSucceeds(getDoc(doc(bob, 'sharedBoards/'+child)));
+    await assertSucceeds(setDoc(doc(bob, 'sharedBoards/'+child+'/records/item'), sharedPayload()));
+    await assertSucceeds(updateDoc(doc(alice, 'sharedBoards/'+child), {grants:{bob:'read'},updatedAt:serverTimestamp()}));
+    await assertSucceeds(getDoc(doc(bob, 'sharedBoards/'+grand)));
+    await assertFails(setDoc(doc(bob, 'sharedBoards/'+child+'/records/item'), sharedPayload()));
+    await assertFails(setDoc(doc(bob, 'sharedBoards/'+grand+'/records/item'), sharedPayload()));
+    await assertSucceeds(updateDoc(doc(alice, 'sharedBoards/'+grand), {grants:{bob:'write'},updatedAt:serverTimestamp()}));
+    await assertSucceeds(setDoc(doc(bob, 'sharedBoards/'+grand+'/records/item'), sharedPayload()));
+    await assertFails(updateDoc(doc(bob, 'sharedBoards/'+child), {grants:{bob:'write'},updatedAt:serverTimestamp()}));
+    await assertFails(updateDoc(doc(alice, 'sharedBoards/'+child), {parentId:'',ancestors:[],updatedAt:serverTimestamp()}));
+    await assertFails(setDoc(doc(bob, 'sharedBoards/'+grand+'/records/board'), {...sharedPayload(),kind:'board'}));
+    await assertSucceeds(updateDoc(doc(alice, 'sharedBoards/'+child), {grants:{bob:'none'},updatedAt:serverTimestamp()}));
+    await assertFails(getDoc(doc(bob, 'sharedBoards/'+child)));
+    await assertSucceeds(getDoc(doc(bob, 'sharedBoards/'+grand)));
+    const carol = test.authenticatedContext('carol',{email:'carol@example.com',email_verified:true}).firestore();
+    const unverified = test.authenticatedContext('unverified',{email:'carol@example.com',email_verified:false}).firestore();
+    const invitation = {boardId:child,boardName:'Private',ownerId:'alice',email:'carol@example.com',role:'read',state:'pending',acceptedBy:'',createdAt:serverTimestamp()};
+    await assertSucceeds(setDoc(doc(alice,'boardInvites/invite-one'),invitation));
+    await assertFails(getDoc(doc(unverified,'boardInvites/invite-one')));
+    await assertSucceeds(getDoc(doc(carol,'boardInvites/invite-one')));
+    await assertSucceeds(getDocs(query(collection(carol,'boardInvites'),where('email','==','carol@example.com'))));
+    await assertSucceeds(getDocs(query(collection(alice,'boardInvites'),where('ownerId','==','alice'))));
+    await assertFails(updateDoc(doc(carol,'boardInvites/invite-one'), {role:'write'}));
+    const escalated = writeBatch(carol);
+    escalated.update(doc(carol,'sharedBoards/'+child), {'grants.carol':'write','emails.carol':'carol@example.com',acceptedInvite:'invite-one',updatedAt:serverTimestamp()});
+    escalated.update(doc(carol,'boardInvites/invite-one'),{state:'accepted',acceptedBy:'carol'});
+    await assertFails(escalated.commit());
+    await assertSucceeds(runTransaction(carol,async t=>{
+      const target=doc(carol,'sharedBoards/'+child);
+      // The invitee cannot read the board before accepting. Use dot-field updates;
+      // the server validates the invite and the precise fields changed.
+      t.update(target,{'grants.carol':'read','emails.carol':'carol@example.com',acceptedInvite:'invite-one',updatedAt:serverTimestamp()});
+      t.update(doc(carol,'boardInvites/invite-one'),{state:'accepted',acceptedBy:'carol'});
+      t.set(doc(carol,'users/carol/sharedRoots/'+child),{boardId:child,updatedAt:serverTimestamp()});
+    }));
+    await assertSucceeds(getDoc(doc(carol,'sharedBoards/'+child)));
+    await assertFails(setDoc(doc(carol,'sharedBoards/'+child+'/records/item'),sharedPayload()));
+    await assertSucceeds(getDoc(doc(alice,'sharedBoards/'+child)));
+    await assertFails(updateDoc(doc(bob, 'sharedBoards/'+grand), {ownerId:'bob',updatedAt:serverTimestamp()}));
+    await assertSucceeds(setDoc(doc(alice, 'sharedBoards/'+grand+'/records/board-original'), {...sharedPayload(),kind:'board'}));
+    await assertFails(setDoc(doc(bob, 'sharedBoards/'+grand+'/records/board-original'), {...sharedPayload(),kind:'item'}));
+    let parent=root, ancestors=[root];
+    for(let depth=1; depth<8; depth++){
+      const id='depth-'+depth;await assertSucceeds(setDoc(doc(alice,'sharedBoards/'+id),metadata(parent,ancestors)));parent=id;ancestors=[...ancestors,id];
+    }
+    await assertSucceeds(getDoc(doc(bob,'sharedBoards/'+parent)));
+    const bulk=writeBatch(bob);for(let i=0;i<25;i++)bulk.set(doc(bob,'sharedBoards/'+parent+'/records/bulk-'+i),sharedPayload());await assertSucceeds(bulk.commit());
+    await assertFails(setDoc(doc(alice,'sharedBoards/too-deep'),metadata(parent,ancestors)));
+    console.log('Shared inheritance, nearest override, deny, privilege escalation and verified invitation acceptance passed.');
     console.log('Firestore owner isolation, unauthenticated denial and write validation passed.');
   } finally { await test.cleanup(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

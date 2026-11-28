@@ -1,6 +1,101 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signed() { return request.auth != null; }
+    function email() { return request.auth.token.get('email','').lower(); }
+    function verified() { return signed() && request.auth.token.get('email_verified',false) == true; }
+    function board(id) { return get(/databases/$(database)/documents/sharedBoards/$(id)).data; }
+    function explicit(b) { return b.grants.get(request.auth.uid, 'inherit'); }
+    function ancestor(b, n) { return board(b.ancestors[n]); }
+    function inherited(b) {
+      let n = b.ancestors.size();
+      return explicit(b) != 'inherit' ? explicit(b)
+        : n > 0 && explicit(ancestor(b,n-1)) != 'inherit' ? explicit(ancestor(b,n-1))
+        : n > 1 && explicit(ancestor(b,n-2)) != 'inherit' ? explicit(ancestor(b,n-2))
+        : n > 2 && explicit(ancestor(b,n-3)) != 'inherit' ? explicit(ancestor(b,n-3))
+        : n > 3 && explicit(ancestor(b,n-4)) != 'inherit' ? explicit(ancestor(b,n-4))
+        : n > 4 && explicit(ancestor(b,n-5)) != 'inherit' ? explicit(ancestor(b,n-5))
+        : n > 5 && explicit(ancestor(b,n-6)) != 'inherit' ? explicit(ancestor(b,n-6))
+        : n > 6 && explicit(ancestor(b,n-7)) != 'inherit' ? explicit(ancestor(b,n-7)) : 'none';
+    }
+    function owns(b) { return signed() && b.ownerId == request.auth.uid; }
+    function reads(b) { return signed() && !b.deleted && (owns(b) || inherited(b) in ['read','write']); }
+    function writes(b) { return signed() && !b.deleted && (owns(b) || inherited(b) == 'write'); }
+    function shape(b) {
+      return b.keys().hasOnly(['ownerId','parentId','ancestors','grants','emails','deleted','updatedAt','acceptedInvite'])
+        && b.ownerId is string && b.parentId is string && b.ancestors is list && b.ancestors.size() < 8
+        && b.grants is map && b.grants.size() <= 50 && b.grants.values().hasOnly(['read','write','none'])
+        && b.emails is map && b.deleted is bool && b.updatedAt == request.time;
+    }
+    function hierarchy(b) {
+      return b.parentId == '' ? b.ancestors.size() == 0
+        : board(b.parentId).ownerId == b.ownerId && !board(b.parentId).deleted
+          && b.ancestors == board(b.parentId).ancestors.concat([b.parentId]);
+    }
+    function accepting(id, old, next) {
+      let invitation = get(/databases/$(database)/documents/boardInvites/$(next.acceptedInvite)).data;
+      return verified() && invitation.state == 'pending' && invitation.email == email()
+        && invitation.boardId == id && invitation.ownerId == old.ownerId
+        && next.diff(old).affectedKeys().hasOnly(['grants','emails','acceptedInvite','updatedAt'])
+        && next.grants.diff(old.grants).affectedKeys().hasOnly([request.auth.uid])
+        && next.emails.diff(old.emails).affectedKeys().hasOnly([request.auth.uid])
+        && next.grants[request.auth.uid] == invitation.role && next.emails[request.auth.uid] == email()
+        && getAfter(/databases/$(database)/documents/boardInvites/$(next.acceptedInvite)).data.state == 'accepted';
+    }
+    match /sharedBoards/{boardId} {
+      allow get: if signed() && (!exists(/databases/$(database)/documents/sharedBoards/$(boardId)) || reads(resource.data));
+      allow list: if reads(resource.data);
+      allow create: if owns(request.resource.data) && shape(request.resource.data) && hierarchy(request.resource.data)
+        && request.resource.data.grants.size() == 0 && request.resource.data.emails.size() == 0;
+      allow update: if shape(request.resource.data)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.parentId == resource.data.parentId
+        && request.resource.data.ancestors == resource.data.ancestors
+        && (owns(resource.data) || accepting(boardId, resource.data, request.resource.data));
+      allow delete: if false;
+      match /records/{recordId} {
+        allow read: if reads(board(boardId));
+        function validRecord() { return writes(board(boardId))
+          && request.resource.data.keys().hasOnly(['schema','json','kind','changeId','updatedAt'])
+          && request.resource.data.schema == 1 && request.resource.data.json is string
+          && request.resource.data.json.size() <= 700000 && request.resource.data.kind in ['board','column','item']
+          && request.resource.data.changeId is string && request.resource.data.updatedAt == request.time
+          && (request.resource.data.kind != 'board' || owns(board(boardId))); }
+        allow create: if validRecord();
+        allow update: if validRecord() && resource.data.kind == request.resource.data.kind;
+        allow delete: if false;
+      }
+      match /children/{childId} {
+        allow read: if reads(board(boardId));
+        allow create, update: if owns(board(boardId)) && request.resource.data.keys().hasOnly(['boardId','updatedAt']) && request.resource.data.updatedAt == request.time
+          && request.resource.data.boardId == childId && board(childId).parentId == boardId;
+        allow delete: if owns(board(boardId));
+      }
+    }
+    match /users/{userId}/sharedRoots/{boardId} {
+      allow read: if signed() && request.auth.uid == userId;
+      allow create, update: if signed() && (request.auth.uid == userId
+        && reads(getAfter(/databases/$(database)/documents/sharedBoards/$(boardId)).data) || owns(getAfter(/databases/$(database)/documents/sharedBoards/$(boardId)).data))
+        && request.resource.data.keys().hasOnly(['boardId','updatedAt']) && request.resource.data.updatedAt == request.time && request.resource.data.boardId == boardId;
+      allow delete: if signed() && request.auth.uid == userId;
+    }
+    match /boardInvites/{inviteId} {
+      function recipient() { return verified() && resource.data.email == email(); }
+      allow read: if signed() && (resource.data.ownerId == request.auth.uid || recipient());
+      allow create: if signed() && request.resource.data.keys().hasOnly(['boardId','boardName','ownerId','email','role','state','acceptedBy','createdAt'])
+        && request.resource.data.ownerId == request.auth.uid && owns(board(request.resource.data.boardId))
+        && request.resource.data.email is string && request.resource.data.email == request.resource.data.email.lower()
+        && request.resource.data.role in ['read','write'] && request.resource.data.state == 'pending'
+        && request.resource.data.acceptedBy == '' && request.resource.data.createdAt == request.time;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['state','acceptedBy'])
+        && resource.data.state == 'pending'
+        && (resource.data.ownerId == request.auth.uid && request.resource.data.state == 'revoked'
+          || recipient() && request.resource.data.state == 'declined'
+          || recipient() && request.resource.data.state == 'accepted'
+            && request.resource.data.acceptedBy == request.auth.uid
+            && getAfter(/databases/$(database)/documents/sharedBoards/$(resource.data.boardId)).data.grants[request.auth.uid] == resource.data.role);
+      allow delete: if signed() && resource.data.ownerId == request.auth.uid;
+    }
     match /users/{userId}/records/{recordId} {
       function owner() {
         return request.auth != null && request.auth.uid == userId;

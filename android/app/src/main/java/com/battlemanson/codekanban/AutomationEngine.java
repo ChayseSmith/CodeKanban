@@ -57,9 +57,12 @@ final class AutomationEngine {
         return run(draft,baseline,now,device,null);
     }
     static boolean run(JSONObject draft,JSONObject baseline,long now,String device,BoardButtons.Event button)throws JSONException{
+        return run(draft,baseline,now,device,button,id->true);
+    }
+    static boolean run(JSONObject draft,JSONObject baseline,long now,String device,BoardButtons.Event button,java.util.function.Predicate<String> canWrite)throws JSONException{
         if(button!=null&&!BoardButtons.exists(draft,button))throw new JSONException("The pressed button no longer exists.");
         String original=draft.toString();List<Item> old=items(baseline),current=items(draft);
-        for(Item item:current){Item before=previous(item,old,current);if(!item.card.has("createdAt"))item.card.put("createdAt",now);
+        for(Item item:current){if(!canWrite.test(item.board.optString("id")))continue;Item before=previous(item,old,current);if(!item.card.has("createdAt"))item.card.put("createdAt",now);
             if(before==null||!before.column.optString("id").equals(item.column.optString("id"))||!before.board.optString("id").equals(item.board.optString("id")))item.card.put("columnEnteredAt",now);
             else if(!item.card.has("columnEnteredAt"))item.card.put("columnEnteredAt",now);
         }
@@ -73,7 +76,7 @@ final class AutomationEngine {
             if(buttonRule&&(button==null||!rule.optString("buttonId").equals(button.button)||!rule.optString("buttonSource","any").equals("any")&&!rule.optString("buttonSource").equals(button.source)))continue;
             rule.remove("error");JSONObject matches=state.optJSONObject(rid);if(matches==null){matches=new JSONObject();state.put(rid,matches);}
             Set<String> live=new HashSet<>();
-            for(int i=0;i<events.size();i++){Item event=events.get(i),target=current.get(i),before=previous(event,old,events);String key=event.key();live.add(key);
+            for(int i=0;i<events.size();i++){Item event=events.get(i),target=current.get(i),before=previous(event,old,events);String key=event.key();live.add(key);if(!canWrite.test(event.board.optString("id")))continue;
                 String scope=rule.optString("boardId");if(!scope.isEmpty()&&!scope.equals(event.board.optString("id"))){matches.remove(key);continue;}
                 if(buttonRule&&!button.includes(event))continue;
                 boolean match=matches(rule,event,before,now),was=matches.optBoolean(key);if(match)matches.put(key,true);else matches.remove(key);
