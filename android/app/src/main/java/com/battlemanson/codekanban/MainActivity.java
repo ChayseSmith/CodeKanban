@@ -24,7 +24,8 @@ import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements CloudSync.Host {
+    private CloudSync cloudSync;private boolean applyingCloud,cloudExpanded;private TextView cloudStatusLabel;
     private int INK, MUTED, ACCENT, BG, SURFACE, BORDER; private boolean dark;
     private BoardButtons.Event pendingButtonEvent;
     private JSONObject automationBaseline;private boolean suppressAutomationOnce;
@@ -70,10 +71,10 @@ public class MainActivity extends Activity {
         if(!dark&&android.os.Build.VERSION.SDK_INT>=35)systemUi|=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         getWindow().getDecorView().setSystemUiVisibility(systemUi);
         skipNextUpdateCheck=getIntent()!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(getIntent().getAction());
-        load();if(data!=null)try{automationBaseline=BoardTemplate.copy(data);}catch(JSONException e){error("Could not initialize automations",e.getMessage());}migrateLegacyReminders();if(data!=null)try{if(ReminderSubscriptions.prepare(this,data,false))save();}catch(JSONException e){error("Could not initialize reminder subscriptions",e.getMessage());}if(getIntent().getBooleanExtra("settingsOpen",false)){tab="settings";getIntent().removeExtra("settingsOpen");}show();openReminder(getIntent());
+        load();if(data!=null)try{automationBaseline=BoardTemplate.copy(data);}catch(JSONException e){error("Could not initialize automations",e.getMessage());}migrateLegacyReminders();if(data!=null)try{if(ReminderSubscriptions.prepare(this,data,false))save();}catch(JSONException e){error("Could not initialize reminder subscriptions",e.getMessage());}if(getIntent().getBooleanExtra("settingsOpen",false)){tab="settings";getIntent().removeExtra("settingsOpen");}cloudSync=CloudSync.get(this);show();openReminder(getIntent());
     }
-    @Override protected void onResume(){super.onResume();UpdateManager.attach(this);updateHandler.removeCallbacks(betaUpdateCheck);updateHandler.postDelayed(betaUpdateCheck,UpdatePolling.INTERVAL);updateHandler.removeCallbacks(automationTick);updateHandler.postDelayed(automationTick,60_000);evaluateAutomations();syncReminders();UpdateManager updates=new UpdateManager(this);boolean pending=updates.resumePending();if(skipNextUpdateCheck)skipNextUpdateCheck=false;else if(!pending&&data!=null)updates.checkOnResume();}
-    @Override protected void onStop(){updateHandler.removeCallbacks(automationTick);updateHandler.removeCallbacks(betaUpdateCheck);UpdateManager.detach(this);super.onStop();}
+    @Override protected void onResume(){super.onResume();if(cloudSync!=null&&data!=null)cloudSync.attach(this);UpdateManager.attach(this);updateHandler.removeCallbacks(betaUpdateCheck);updateHandler.postDelayed(betaUpdateCheck,UpdatePolling.INTERVAL);updateHandler.removeCallbacks(automationTick);updateHandler.postDelayed(automationTick,60_000);evaluateAutomations();syncReminders();UpdateManager updates=new UpdateManager(this);boolean pending=updates.resumePending();if(skipNextUpdateCheck)skipNextUpdateCheck=false;else if(!pending&&data!=null)updates.checkOnResume();}
+    @Override protected void onStop(){if(cloudSync!=null)cloudSync.detach(this);updateHandler.removeCallbacks(automationTick);updateHandler.removeCallbacks(betaUpdateCheck);UpdateManager.detach(this);super.onStop();}
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){super.onRequestPermissionsResult(requestCode,permissions,grantResults);if(requestCode==2001)syncReminders();}
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(intent!=null&&"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction()))skipNextUpdateCheck=true;openReminder(intent);}
     private void openReminder(Intent intent){if(intent!=null&&ReminderSubscriptions.OPEN.equals(intent.getAction())){tab="reminders";show();intent.setAction(null);return;}if(intent==null||!"com.battlemanson.codekanban.OPEN_REMINDER".equals(intent.getAction())||data==null)return;String boardId=intent.getStringExtra("boardId"),id=intent.getStringExtra("cardId");if(boardId!=null&&id!=null){JSONObject b=find(array(data,"boards"),boardId);if(b!=null)revealCard(b,id);}intent.setAction(null);}
@@ -96,7 +97,7 @@ public class MainActivity extends Activity {
             out=file.startWrite();out.write(draft.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);out=null;
             AutomationEngine.adopt(data,draft);automationBaseline=baseline;
         }catch(Exception e){if(out!=null)file.failWrite(out);Toast.makeText(this,"Could not save: "+e.getMessage(),Toast.LENGTH_LONG).show();return false;}finally{pendingButtonEvent=null;}
-        queueBackup();syncReminders();return true;
+        queueBackup();syncReminders();if(cloudSync!=null&&!applyingCloud)cloudSync.localSaved(data);return true;
     }
     private void evaluateAutomations(){
         if(data==null||automationBaseline==null)return;
@@ -383,7 +384,43 @@ public class MainActivity extends Activity {
         else if(request==PICK_RESTORE_FILE){BACKUPS.execute(()->{try{JSONObject backup=BackupStore.validate(BackupStore.read(getContentResolver(),uri));runOnUiThread(()->{if(isFinishing()||isDestroyed())return;new AlertDialog.Builder(this).setTitle("Restore this backup?").setMessage("This replaces all current boards, work items, defaults, and theme with the selected snapshot. Make a backup of the current data first if you need it.").setNegativeButton("Cancel",null).setPositiveButton("Restore",(d,w)->restoreBackup(backup)).show();});}catch(Exception e){runOnUiThread(()->{if(!isFinishing()&&!isDestroyed())error("Could not restore backup",e.getMessage());});}});}
     }
     private void restoreBackup(JSONObject backup){try{JSONObject previous=data;String previousTheme=themeMode();data=BoardTemplate.copy(backup.getJSONObject("data"));ReminderSubscriptions.prepare(this,data,true);suppressAutomationOnce=true;getPreferences(MODE_PRIVATE).edit().putString("themeMode",backup.optString("themeMode",backup.getBoolean("darkMode")?"dark":"light")).apply();if(save()){current="";tab="boards";recreate();}else{data=previous;getPreferences(MODE_PRIVATE).edit().putString("themeMode",previousTheme).apply();}}catch(JSONException e){error("Could not restore backup",e.getMessage());}}
+    @Override public JSONObject cloudData(){return data;}
+    @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused&&cloudSync!=null)cloudSync.apply();}
+    @Override public void cloudStatus(){if(cloudStatusLabel!=null&&cloudStatusLabel.isAttachedToWindow())cloudStatusLabel.setText(cloudSummary());}
+    private String cloudSummary(){com.google.firebase.auth.FirebaseUser user=cloudSync.auth.getCurrentUser();return (user==null?"Not signed in":user.getEmail())+"\n"+cloudSync.status();}
+    @Override public boolean cloudApply(JSONArray boards,boolean initial){
+        if(data==null||!hasWindowFocus())return false;JSONObject previous=data;
+        try{if(!initial&&CloudRecords.canonical(data.getJSONArray("boards")).equals(CloudRecords.canonical(boards)))return true;
+            if(initial){android.util.AtomicFile backup=new android.util.AtomicFile(new File(getFilesDir(),"before-cloud-link.json"));FileOutputStream out=backup.startWrite();try{out.write(BackupStore.snapshot(data,dark,themeMode()).getBytes(StandardCharsets.UTF_8));backup.finishWrite(out);}catch(Exception e){backup.failWrite(out);throw e;}}
+            JSONObject draft=BoardTemplate.copy(data);draft.put("boards",new JSONArray(boards.toString()));ReminderSubscriptions.prepare(this,draft,true);data=draft;applyingCloud=true;suppressAutomationOnce=true;
+            if(!save()){data=previous;return false;}show();return true;
+        }catch(Exception e){data=previous;error("Could not receive cloud boards",e.getMessage());return false;}finally{applyingCloud=false;suppressAutomationOnce=false;}
+    }
+    private void cloudView(){
+        cloudStatusLabel=text(cloudSummary(),14,INK,false);pad(cloudStatusLabel,12);content.addView(cloudStatusLabel);
+        empty("Sync your boards across devices using the same email/password account. Theme, release channel, templates, automation rules and reminder subscriptions stay local. Publish the supplied Firestore rules before connecting.");
+        if(cloudSync.auth.getCurrentUser()==null){button("Sign in / Create account",this::cloudSignIn);}
+        else{
+            button("Upload / merge local boards",()->confirmCloudLink(true));button("Use cloud boards on this device",()->confirmCloudLink(false));
+            if(cloudSync.linked())button("Retry sync",()->cloudSync.retry());
+            button("Sign out",()->{cloudSync.signOut();show();});
+        }
+        if(new File(getFilesDir(),"before-cloud-link.json").exists())button("Recover boards saved before connecting",()->new AlertDialog.Builder(this).setTitle("Recover local snapshot?").setMessage("This signs out and restores the local boards saved immediately before your most recent cloud connection. Cloud data stays unchanged while signed out.").setNegativeButton("Cancel",null).setPositiveButton("Recover",(d,w)->{try{String json;try(InputStream in=new FileInputStream(new File(getFilesDir(),"before-cloud-link.json"));ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] bytes=new byte[8192];int n;while((n=in.read(bytes))!=-1)out.write(bytes,0,n);json=out.toString("UTF-8");}JSONObject backup=BackupStore.validate(json);cloudSync.signOut();restoreBackup(backup);}catch(Exception e){error("Could not recover snapshot",e.getMessage());}}).show());
+    }
+    private void confirmCloudLink(boolean upload){
+        if(cloudSync.busy()){Toast.makeText(this,"Already connecting",Toast.LENGTH_SHORT).show();return;}
+        new AlertDialog.Builder(this).setTitle(upload?"Upload and merge boards?":"Use cloud boards?").setMessage(upload?"Your local boards will be uploaded to this account, and other cloud boards added to this device. If records have the same IDs, your local versions win. Only connect to an account you intend to share these boards with. A local recovery snapshot is saved first.":"This replaces this device's boards with this account's cloud boards, including an empty list if the account has none. A local recovery snapshot is saved first. Your device settings stay local.").setNegativeButton("Cancel",null).setPositiveButton("Connect",(d,w)->cloudSync.link(upload)).show();
+    }
+    private void cloudSignIn(){
+        LinearLayout form=vertical();pad(form,20);EditText email=field(form,"Email","",false);email.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);EditText password=field(form,"Password","",false);password.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        form.addView(action("Reset password",()->{String address=email.getText().toString().trim();if(address.isEmpty()){email.setError("Enter your email address");return;}cloudSync.auth.sendPasswordResetEmail(address).addOnCompleteListener(this,task->{if(task.isSuccessful())Toast.makeText(this,"If this account exists, a reset email will be sent.",Toast.LENGTH_LONG).show();else error("Could not request password reset",task.getException()==null?"Try again":task.getException().getMessage());});}));
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Cloud account").setView(form).setNegativeButton("Cancel",null).setNeutralButton("Create account",null).setPositiveButton("Sign in",null).create();
+        dialog.setOnShowListener(d->{for(int which:new int[]{-1,-3})dialog.getButton(which).setOnClickListener(v->{String address=email.getText().toString().trim(),secret=password.getText().toString();if(address.isEmpty()||secret.isEmpty()){email.setError("Enter an email and password");return;}dialog.getButton(-1).setEnabled(false);dialog.getButton(-3).setEnabled(false);
+            com.google.android.gms.tasks.Task<com.google.firebase.auth.AuthResult> task=which==-3?cloudSync.auth.createUserWithEmailAndPassword(address,secret):cloudSync.auth.signInWithEmailAndPassword(address,secret);
+            task.addOnCompleteListener(this,result->{dialog.getButton(-1).setEnabled(true);dialog.getButton(-3).setEnabled(true);if(result.isSuccessful()){dialog.dismiss();show();}else password.setError(result.getException()==null?"Sign-in failed":result.getException().getMessage());});});});dialog.show();
+    }
     private void settings(){
+        TextView cloudToggle=action((cloudExpanded?"▾":"▸")+"  Cloud sync",()->{cloudExpanded=!cloudExpanded;show();});cloudToggle.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);content.addView(cloudToggle);if(cloudExpanded)cloudView();
         section("Appearance");
         Spinner theme=new Spinner(this);theme.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Light Mode","Dark Mode","Follow Device"}));
         theme.setSelection("light".equals(themeMode())?0:"dark".equals(themeMode())?1:2);content.addView(theme);

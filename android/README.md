@@ -34,7 +34,7 @@ Files selected through Android's document picker are outside app-specific storag
 
 ## Build and installation
 
-Open `android` in Android Studio, install Android SDK 35, and run the app on a device or emulator. Alternatively, with JDK 17 and the Android SDK installed, run `./gradlew :app:assembleDebug` from this directory. The APK is created at `app/build/outputs/apk/debug/app-debug.apk`.
+Open `android` in Android Studio, install Android SDK 36, and run the app on a device or emulator. Alternatively, with JDK 17 and the Android SDK installed, run `./gradlew :app:assembleDebug` from this directory. The APK is created at `app/build/outputs/apk/debug/app-debug.apk`.
 
 The GitHub Actions workflow `.github/workflows/android-release.yml` builds, signs and verifies a release APK, then publishes `code-kanban.apk` and `update.json` to a GitHub Release. It runs on pushes to the repository's default branch and can also be started manually on another branch. Successful builds also have a `code-kanban-android` workflow artifact. The older Azure pipeline file is retained for the existing Azure remote; GitHub Actions is the release workflow described here.
 
@@ -133,3 +133,9 @@ Automation actions can **Reset column age to zero**, **Set column age (hours)**,
 For a reset-staleness button, configure two actions on the same button rule: **Clear card accent color**, then **Reset column age to zero**. Keep the separate **Conditions become true → Column age At least 24 hours → Set card accent color** rule. When actions make a previously matched condition false, it is re-armed in the same save, so the color can return after a fresh interval even if you close the app and reopen it after that interval. Actions still do not recursively execute other rules in that save. Age checks catch up on reopening rather than running continuously in the background.
 
 Custom buttons lay out horizontally first, in their configured order, with a 112 dp minimum width, 48 dp minimum touch height and 8 dp gaps. They wrap onto another row using the available board/column/card width. Longer labels can grow or wrap within the available width, and rows adapt to rotation and right-to-left layouts.
+
+## Private cloud sync
+
+See [Firebase setup and first sync](../firebase/README.md). Settings → Cloud sync supports email/password account creation, sign-in, password reset, explicit initial upload/merge or cloud download, retries, sign-out, and recovery of the local snapshot saved before linking. Boards, columns, work items, relationships, reminders and custom buttons sync. Theme, release channel, default templates, automation definitions/runtime state and reminder subscriptions stay local in this first version. Incoming data does not replay local creation/move automations. Automations are not a cloud execution service.
+
+Each board, column and work item has its own Firestore record. Different-item edits are independent; concurrent edits to the same record use last-write-wins. Offline edits use both Firebase persistence and a durable local outbox. Deletions use tombstones. A device receives live updates while the app is open and catches up when reopened; newly remote reminders cannot alert on a device until it has received and subscribed to them. Switching cloud accounts requires an explicit board connection; it never automatically uploads local boards to a different account. Signing out retains boards locally. This is private account sync, not team sharing yet.

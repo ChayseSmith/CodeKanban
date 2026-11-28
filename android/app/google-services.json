@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "500777091074",
+    "project_id": "kanban-83cd1",
+    "storage_bucket": "kanban-83cd1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:500777091074:android:f05defdfed68f85428a71b",
+        "android_client_info": {
+          "package_name": "com.battlemanson.codekanban"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCrtgraMaUlOAAHK2VBeXIdqoWX7tQgyho"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

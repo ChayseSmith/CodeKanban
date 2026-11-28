@@ -3,3 +3,9 @@
 *.keystore
 *.jks
 *.p12
+
+/.codex-check/
+/.firebase/
+/firebase-debug.log
+/firestore-debug.log
+/ui-debug.log

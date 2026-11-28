@@ -1,0 +1,24 @@
+package com.battlemanson.codekanban;
+import org.json.*;
+import java.util.*;
+
+public final class CloudRecordsTest {
+    static void check(boolean value,String message){if(!value)throw new AssertionError(message);}
+    static JSONObject data()throws Exception{return new JSONObject().put("boards",new JSONArray().put(new JSONObject().put("id","b").put("name","Board").put("parent","").put("buttons",new JSONArray()).put("columns",new JSONArray().put(new JSONObject().put("id","c").put("name","Todo").put("color","#EF4444").put("cards",new JSONArray().put(new JSONObject().put("id","one").put("title","One").put("reminders",new JSONArray().put(new JSONObject().put("id","r").put("originDeviceId","original")))).put(new JSONObject().put("id","two").put("title","Two")))))));}
+    public static void main(String[] args)throws Exception{
+        JSONObject local=data();Map<String,String> original=CloudRecords.encode(local);check(original.size()==4,"Separate board, column and work-item records");JSONArray boards=CloudRecords.decode(original);check(CloudRecords.canonical(boards).equals(CloudRecords.canonical(local.getJSONArray("boards"))),"Lossless round trip including reminder origin");
+        JSONObject reordered=new JSONObject().put("z",1).put("a",2),other=new JSONObject().put("a",2).put("z",1);check(CloudRecords.canonical(reordered).equals(CloudRecords.canonical(other)),"Stable comparisons ignore JSON key order");
+        JSONObject edited=BoardTemplate.copy(local);edited.getJSONArray("boards").getJSONObject(0).getJSONArray("columns").getJSONObject(0).getJSONArray("cards").getJSONObject(0).put("title","Changed");Map<String,String> changed=CloudRecords.encode(edited),delta=CloudRecords.changes(original,changed);check(delta.size()==1,"Editing one item does not upload the entire board");
+        CloudReplica replica=new CloudReplica();replica.records.putAll(original);replica.lastLocal.putAll(original);replica.local(changed);String key=delta.keySet().iterator().next(),first=replica.pending.get(key).token;
+        Map<String,String> echo=new TreeMap<>(original);replica.remote(echo,true);check(replica.records.get(key).equals(changed.get(key)),"Server echo cannot overwrite pending edit");
+        edited.getJSONArray("boards").getJSONObject(0).getJSONArray("columns").getJSONObject(0).getJSONArray("cards").getJSONObject(0).put("title","Newest");replica.local(CloudRecords.encode(edited));replica.acknowledged(key,first);check(replica.pending.containsKey(key),"Old write acknowledgement cannot discard a newer offline edit");
+        CloudReplica recovered=CloudReplica.read(replica.json());check(recovered.records.equals(replica.records)&&recovered.lastLocal.equals(replica.lastLocal)&&recovered.pending.get(key).token.equals(replica.pending.get(key).token),"Outbox survives process restart");
+        Map<String,String> remote=new TreeMap<>(original);String second=CloudRecords.id("item","b","two");JSONObject remoteItem=new JSONObject(remote.get(second));remoteItem.getJSONObject("data").put("title","Remote edit");remote.put(second,CloudRecords.canonical(remoteItem));recovered.remote(remote,true);check(recovered.records.get(second).equals(remote.get(second))&&recovered.records.get(key).equals(replica.records.get(key)),"Different item edits merge without overwriting local work");
+        recovered.acknowledged(key,recovered.pending.get(key).token);check(recovered.pending.isEmpty(),"Current acknowledgement clears outbox entry");
+        edited.getJSONArray("boards").getJSONObject(0).getJSONArray("columns").getJSONObject(0).getJSONArray("cards").remove(0);Map<String,String> deleted=CloudRecords.changes(changed,CloudRecords.encode(edited));check(CloudRecords.DELETED.equals(deleted.get(key)),"Deletions create tombstones");
+        Map<String,String> catalog=new TreeMap<>(original);catalog.put(CloudRecords.id("board","b","b"),CloudRecords.DELETED);check(CloudRecords.decode(catalog).length()==0,"Deleted boards cannot be resurrected by retained child records");
+        CloudReplica waiting=new CloudReplica();waiting.records.putAll(original);waiting.lastLocal.putAll(original);waiting.remote(remote,true);waiting.local(original);check(waiting.pending.isEmpty()&&waiting.records.get(second).equals(remote.get(second)),"Deferred remote data is not treated as a local deletion");
+        CloudReplica ordering=new CloudReplica();ordering.records.putAll(original);ordering.lastLocal.putAll(original);JSONObject removed=BoardTemplate.copy(local);removed.getJSONArray("boards").getJSONObject(0).getJSONArray("columns").getJSONObject(0).getJSONArray("cards").remove(0);ordering.local(CloudRecords.encode(removed));check(!ordering.pending.containsKey(second),"Deleting a neighbor does not upload another item's stale content just because its array index shifted");
+        System.out.println("Cloud record round-trip, per-item updates, offline outbox, concurrent edits, tombstones and deferred imports passed.");
+    }
+}

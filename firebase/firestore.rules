@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/records/{recordId} {
+      function owner() {
+        return request.auth != null && request.auth.uid == userId;
+      }
+      allow read, delete: if owner();
+      allow create, update: if owner()
+        && request.resource.data.keys().hasOnly(['schema', 'json', 'changeId', 'updatedAt'])
+        && request.resource.data.schema == 1
+        && request.resource.data.json is string
+        && request.resource.data.json.size() <= 700000
+        && request.resource.data.changeId is string
+        && request.resource.data.changeId.size() <= 64
+        && request.resource.data.updatedAt == request.time;
+    }
+  }
+}
