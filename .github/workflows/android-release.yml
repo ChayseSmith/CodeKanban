@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: android-release
@@ -85,6 +86,69 @@ jobs:
           }
           Path('release-output/update.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
           PY
+      - name: Set up Node for Firestore rules tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Set up Java for Firestore emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Test Firestore rules and deployment logic
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/firebase-rules-tests/node_modules
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s firebase -p 'test_deploy_rules.py'
+          npm install --prefix "$RUNNER_TEMP/firebase-rules-tests" --no-audit --no-fund firebase-tools@15.37.0 firebase@12.19.0 @firebase/rules-unit-testing@5.0.2
+          node "$RUNNER_TEMP/firebase-rules-tests/node_modules/firebase-tools/lib/bin/firebase.js" emulators:exec --only firestore --project demo-kanban-sync "node firebase/rules.test.cjs"
+      - name: Validate optional Firebase deployment configuration
+        id: firebase-config
+        shell: bash
+        env:
+          ENABLED: ${{ vars.FIREBASE_RULES_DEPLOY_ENABLED }}
+          PROVIDER: ${{ vars.FIREBASE_WORKLOAD_IDENTITY_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ vars.FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          project = json.loads(Path('android/app/google-services.json').read_text())['project_info']['project_id']
+          enabled = os.environ.get('ENABLED', '').lower()
+          if enabled not in ('', 'false', 'true'):
+              raise SystemExit('FIREBASE_RULES_DEPLOY_ENABLED must be true or false.')
+          if enabled == 'true':
+              if not re.fullmatch(r'projects/[0-9]+/locations/global/workloadIdentityPools/[^/]+/providers/[^/]+', os.environ.get('PROVIDER', '')):
+                  raise SystemExit('Configure FIREBASE_WORKLOAD_IDENTITY_PROVIDER before enabling deployment.')
+              if not os.environ.get('SERVICE_ACCOUNT', '').endswith('@' + project + '.iam.gserviceaccount.com'):
+                  raise SystemExit('Configure FIREBASE_DEPLOY_SERVICE_ACCOUNT in the Android Firebase project.')
+          else:
+              print('Automatic rules deployment is disabled until the one-time Google/GitHub setup is complete.')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('project_id=' + project + '\n')
+              output.write('enabled=' + ('true' if enabled == 'true' else 'false') + '\n')
+          PY
+      - name: Authenticate Firebase rules deployer
+        if: steps.firebase-config.outputs.enabled == 'true'
+        id: firebase-auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ steps.firebase-config.outputs.project_id }}
+          workload_identity_provider: ${{ vars.FIREBASE_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 600s
+          create_credentials_file: false
+          export_environment_variables: false
+      - name: Deploy Firestore rules before publishing APK
+        if: steps.firebase-config.outputs.enabled == 'true'
+        env:
+          FIREBASE_PROJECT_ID: ${{ steps.firebase-config.outputs.project_id }}
+          FIREBASE_DEPLOY_ACCESS_TOKEN: ${{ steps.firebase-auth.outputs.access_token }}
+        run: python3 firebase/deploy_rules.py
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:

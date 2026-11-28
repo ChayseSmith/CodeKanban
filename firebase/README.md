@@ -54,3 +54,7 @@ Read access allows viewing and local column/section collapsing; it does not perm
 Access is checked in both the app and Firestore. Server ACL metadata is separate from editable JSON payloads, and collaborators cannot change ownership, forge inheritance or upgrade their role. Revocation hides inaccessible boards when the connected client receives it; no system can retract data already downloaded to an offline device or a separate export. Offline edits remain queued and can be rejected after a downgrade. Sign-out retains downloaded boards locally but disables shared editing. Cloud execution of automations and invitation email delivery are not included.
 
 Emulator tests cover inheritance, explicit Read/Write/No access overrides, email verification, invitation acceptance, owner guarantees, role escalation, maximum depth and bulk writes. Java permission tests cover the matching client behavior, read-only save checks and isolation from private sync.
+
+## Automated rules deployment
+
+The release workflow supports optional keyless Firestore rules deployment before publishing APKs. Complete the one-time [Google/GitHub setup](DEPLOYMENT.md) to enable it. Until configured, manual rules publishing remains necessary.
